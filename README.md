@@ -86,14 +86,11 @@ TensorFlow API 列表
 │   ├── llm_gen_harness.py               # LLM 生成 TensorFlow Atheris Harness
 │   ├── gen_harness_unified.py           # 统一模板 / 辅助式 Harness 生成
 │   ├── pepiline.py                      # 批量生成 pipeline
-│   └── batch_gen_harness_summary.json   # 批量生成结果摘要
 │
 ├── screen/                              # 模块三：Harness 筛选与调度执行
 │   ├── cli/main.py                      # Screen 命令行入口
 │   ├── bandit_audit_driver_hier.py      # 双层 UCB 主调度逻辑
 │   ├── cov_global_union_audit.py        # 全局 union 覆盖率审计
-│   ├── auto_harnesses.json              # harness 清单
-│   ├── auto_harness_experiment.json     # 实验 harness 清单
 │   ├── groups_map.json                  # harness → group 映射
 │   ├── bandit/                          # UCB 策略、reward 计算
 │   ├── pool/                            # profile 池管理
@@ -105,10 +102,11 @@ TensorFlow API 列表
 ├── atheris-doc/                         # Atheris 使用说明
 │   └── atheris_readme.txt
 │
-├── fuzz_output/                         # 生成或运行中的 harness 输出目录
+├── tf_api_txt/                          # TensorFlow API 文档文本包（管线 --doc_dir 输入）
+├── dl_fuzzer_crash/                     # crash / PoC 示例
+├── fuzz_output/                         # 本地生成或运行中的 harness 输出目录（不入库）
 ├── run_screen.sh                        # Screen 模块启动脚本
-├── yaml2harness.json                    # YAML → harness 生成清单
-└── atheris-doc/                         # Atheris 框架使用文档
+└── yaml2harness.json                    # YAML → harness 生成清单
 ```
 
 ---
@@ -169,7 +167,7 @@ cd build_yaml
 
 python pipeline.py \
   --api_list api_list.txt \
-  --doc_dir ../api_txt \
+  --doc_dir ../tf_api_txt \
   --work_dir ../yaml_output_tf \
   --stages A,B,C,D,E \
   --llm_base_url "$OPENAI_BASE_URL" \
@@ -207,7 +205,7 @@ yaml_output_tf/08_final/
 ```bash
 python fuzz_api_one/llm_gen_harness.py \
   --yaml yaml_output_tf/08_final/tf_math_reduce_sum.yaml \
-  --api-txt api_txt/tf.math.reduce_sum.txt \
+  --api-txt tf_api_txt/tf_math_reduce_sum.txt \
   --atheris-doc atheris-doc/atheris_readme.txt \
   --out fuzz_output/llm.tf.math.reduce_sum.py \
   --model gpt-5.4
@@ -240,7 +238,7 @@ python fuzz_api_one/pepiline.py \
   {
     "api": "tf.math.reduce_sum",
     "yaml": ["yaml_output_tf/08_final/tf_math_reduce_sum.yaml"],
-    "txt": "api_txt/tf.math.reduce_sum.txt"
+    "txt": "tf_api_txt/tf_math_reduce_sum.txt"
   }
 ]
 ```
@@ -269,11 +267,11 @@ TensorFlow 版 Screen 模块沿用 PyTorch 版的双层 UCB 调度思想：
 bash run_screen.sh 24h
 ```
 
-或直接调用 Screen CLI：
+或直接调用 Screen CLI（`--harnesses_json` 传入本地批量生成/筛选产出的 harness 清单，不入库）：
 
 ```bash
 python3 -m screen.cli.main \
-  --harnesses_json screen/auto_harnesses.json \
+  --harnesses_json <harness 清单 JSON> \
   --groups_map screen/groups_map.json \
   --root fuzz_output/ \
   --epoch 30 \
@@ -285,10 +283,10 @@ python3 -m screen.cli.main \
 常用清单文件：
 
 ```text
-screen/auto_harnesses.json
-screen/auto_harness_experiment.json
 screen/groups_map.json
 ```
+
+仓库只入库 `groups_map.json`；harness 清单（`--harnesses_json`）与生成的 harness 均属本地实验产物，不入库。
 
 ---
 
@@ -341,12 +339,11 @@ export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 | `build_yaml/tf_materialize_yaml.py` | 生成最终 YAML |
 | `fuzz_api_one/llm_gen_harness.py` | 单个 TensorFlow harness 的 LLM 生成入口 |
 | `fuzz_api_one/pepiline.py` | 批量 harness 生成入口 |
-| `screen/auto_harnesses.json` | Screen 使用的 harness 清单 |
 | `screen/groups_map.json` | harness 到 group 的映射 |
+| `tf_api_txt/` | TensorFlow API 文档文本包（pipeline / harness 生成输入） |
 | `screen/cov_global_union_audit.py` | 全局覆盖率审计 |
 | `run_screen.sh` | Screen 执行脚本 |
 | `dl_fuzzer_crash/` | crash / PoC 示例 |
-| `fuzz_output_experiment/` | 实验 harness 示例 |
 
 ---
 
