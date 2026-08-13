@@ -79,8 +79,7 @@ TensorFlow API 列表
 │   ├── tf_llm_prompts.py                # TensorFlow YAML 构建相关 prompt
 │   ├── tf_schema_common.py              # schema 公共结构
 │   ├── tf_schema_common_ext.py          # schema 扩展结构
-│   ├── tf_raw_ops.txt                   # TensorFlow raw_ops 列表
-│   └── api_list*.txt                    # TensorFlow API 列表样例
+│   └── tf_raw_ops.txt                   # TensorFlow raw_ops 列表
 │
 ├── fuzz_api_one/                        # 模块二：TensorFlow Harness 生成
 │   ├── llm_gen_harness.py               # LLM 生成 TensorFlow Atheris Harness
@@ -103,7 +102,6 @@ TensorFlow API 列表
 │   └── atheris_readme.txt
 │
 ├── tf_api_txt/                          # TensorFlow API 文档文本包（管线 --doc_dir 输入）
-├── dl_fuzzer_crash/                     # crash / PoC 示例
 ├── fuzz_output/                         # 本地生成或运行中的 harness 输出目录（不入库）
 ├── run_screen.sh                        # Screen 模块启动脚本
 └── yaml2harness.json                    # YAML → harness 生成清单
@@ -141,7 +139,7 @@ TensorFlow API 列表
 
 ### API 列表格式
 
-`api_list.txt` 中每行一个 TensorFlow API，例如：
+API 列表为本地输入文件（不入库，需自行准备；仓库内提供 `build_yaml/API_list.txt` 作为示例）。每行一个 TensorFlow API，例如：
 
 ```text
 tf.raw_ops.Conv2D
@@ -343,7 +341,6 @@ export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 | `tf_api_txt/` | TensorFlow API 文档文本包（pipeline / harness 生成输入） |
 | `screen/cov_global_union_audit.py` | 全局覆盖率审计 |
 | `run_screen.sh` | Screen 执行脚本 |
-| `dl_fuzzer_crash/` | crash / PoC 示例 |
 
 ---
 

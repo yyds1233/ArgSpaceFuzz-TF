@@ -35,10 +35,10 @@ run_ablation_replay.sh
 test_pruned_harnesses.py
 screen/auto_harness_all_filtered_psr*.json
 
-# ===== POC 与崩溃复现（根目录散件，示例保留在 dl_fuzzer_crash/） =====
+# ===== POC 与崩溃复现（本地保留，不入库） =====
 poc/
+dl_fuzzer_crash/
 slow-unit-*
-dl_fuzzer_crash/test.py
 
 # ===== TitanFuzz / DocTer 对比实验 =====
 merged_scripts_titan_fuzz/
@@ -63,6 +63,9 @@ build_yaml/tf_yaml_skeleton_empty_param/
 fuzz_api_one/batch_gen_harness_summary.json
 screen/auto_harnesses.json
 screen/auto_harness_experiment.json
+
+# ===== 本地 API 列表输入（不入库） =====
+build_yaml/api_list*.txt
 
 # ===== 第三方 vendored 源码（pip 安装，不入库） =====
 atheris/
