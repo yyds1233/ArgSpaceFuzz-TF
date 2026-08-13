@@ -1,0 +1,13 @@
+tf.signal.ifftshift
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/signal/ifftshift
+
+Summary
+Inverse of fftshift.
+
+Signature
+tf.signal.ifftshift(x, axes=None, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

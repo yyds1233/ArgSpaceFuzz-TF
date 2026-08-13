@@ -1,0 +1,18 @@
+tf.space_to_batch
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/space_to_batch
+
+Summary
+TensorFlow API reference for tf.space_to_batch. This operation or helper is documented on the official TensorFlow API page.
+
+Signature
+tf.space_to_batch(
+    input,
+    paddings,
+    block_size=None,
+    name=None,
+    block_shape=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

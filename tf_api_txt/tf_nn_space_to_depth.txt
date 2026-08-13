@@ -1,0 +1,13 @@
+tf.nn.space_to_depth
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/nn/space_to_depth
+
+Summary
+TensorFlow API reference for tf.nn.space_to_depth. This operation or helper is documented on the official TensorFlow API page.
+
+Signature
+tf.nn.space_to_depth(input, block_size, name=None, data_format="NHWC")
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

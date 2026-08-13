@@ -1,0 +1,13 @@
+tf.nn.compute_average_loss
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/nn/compute_average_loss
+
+Summary
+Scales per-example losses with sample weights and computes their average.
+
+Signature
+tf.nn.compute_average_loss(per_example_loss, sample_weight=None, global_batch_size=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

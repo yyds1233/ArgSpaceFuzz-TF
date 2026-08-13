@@ -1,0 +1,35 @@
+tf.bitwise.bitwise_and
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/bitwise/bitwise_and
+
+Summary
+Computes the bitwise AND of x and y element-wise.
+
+Signature
+tf.bitwise.bitwise_and(x, y, name=None)
+
+tf.bitwise.bitwise_and(
+    x: Annotated[Any, TV_BitwiseAnd_T],
+    y: Annotated[Any, TV_BitwiseAnd_T],
+    name=None
+) -> Annotated[Any, TV_BitwiseAnd_T]
+The result will have those bits set, that are set in both x and y. The computation is performed on the underlying representations of x and y.
+
+For example:
+
+import tensorflow as tf
+from tensorflow.python.ops import bitwise_ops
+dtype_list = [tf.int8, tf.int16, tf.int32, tf.int64,
+              tf.uint8, tf.uint16, tf.uint32, tf.uint64]
+
+for dtype in dtype_list:
+  lhs = tf.constant([0, 5, 3, 14], dtype=dtype)
+  rhs = tf.constant([5, 0, 7, 11], dtype=dtype)
+  exp = tf.constant([0, 0, 3, 10], dtype=tf.float32)
+
+  res = bitwise_ops.bitwise_and(lhs, rhs)
+  tf.assert_equal(tf.cast(res, tf.float32), exp) # TRUE
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

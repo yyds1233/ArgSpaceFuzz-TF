@@ -1,0 +1,21 @@
+tf.math.erfinv
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/math/erfinv
+
+View source on GitHub
+tensorflow/python/ops/math_ops.py:5330
+
+Signature
+tf.math.erfinv(x, name=None)
+
+Compute inverse error function.
+
+Given `x`, compute the inverse error function of `x`. This function
+is the inverse of `tf.math.erf`.
+
+Args:
+  x: `Tensor` with type `float` or `double`.
+  name: A name for the operation (optional).
+Returns:
+  Inverse error function of `x`.

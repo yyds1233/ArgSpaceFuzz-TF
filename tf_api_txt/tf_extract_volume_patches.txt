@@ -1,0 +1,13 @@
+tf.extract_volume_patches
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/extract_volume_patches
+
+Summary
+Extracts patches from 5-D volumes.
+
+Signature
+tf.extract_volume_patches(input, ksizes, strides, padding, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

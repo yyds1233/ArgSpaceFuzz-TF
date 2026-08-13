@@ -683,7 +683,7 @@ def main() -> None:
                     help="OpenAI-compatible API base URL (e.g., http://localhost:11434/v1)")
     ap.add_argument("--llm_model", default="gpt-5-codex",
                     help="model name for the LLM API")
-    ap.add_argument("--llm_api_key", default="sk-WXtqOuBZPY096KTcDdE866275274464d88943d068aA7Ff5d",
+    ap.add_argument("--llm_api_key", default=os.environ.get("LLM_API_KEY", ""),
                     help="API key (or set LLM_API_KEY env var)")
     ap.add_argument("--llm_temperature", type=float, default=0.0)
     ap.add_argument("--llm_max_tokens", type=int, default=4096)

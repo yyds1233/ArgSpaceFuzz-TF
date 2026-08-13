@@ -1,0 +1,13 @@
+tf.image.hsv_to_rgb
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/image/hsv_to_rgb
+
+Summary
+Converts one or more images from HSV to RGB.
+
+Signature
+tf.image.hsv_to_rgb(images, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

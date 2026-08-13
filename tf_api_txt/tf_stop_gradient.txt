@@ -1,0 +1,23 @@
+tf.stop_gradient
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/stop_gradient
+
+View source on GitHub
+tensorflow/python/ops/array_ops.py:6667
+
+Signature
+tf.stop_gradient(input, name=None)
+
+Stops gradient computation.
+
+NOTE: This docstring is patched out below. See
+tensorflow/core/api_def/base_api/api_def_StopGradient.pbtxt for the full
+docstring. That file determines the public documentation page.
+
+Args:
+  input: A `Tensor`.
+  name: A name for this operation.
+
+Returns:
+  A `Tensor`. Has the same dtype as `input`.

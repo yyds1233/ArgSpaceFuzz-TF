@@ -1,0 +1,13 @@
+tf.linalg.band_part
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/linalg/band_part
+
+Summary
+Copies a tensor setting everything outside a central band to zero.
+
+Signature
+tf.linalg.band_part(input, num_lower, num_upper, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

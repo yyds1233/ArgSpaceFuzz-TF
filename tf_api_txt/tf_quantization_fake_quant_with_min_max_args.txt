@@ -1,0 +1,13 @@
+tf.quantization.fake_quant_with_min_max_args
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/quantization/fake_quant_with_min_max_args
+
+Summary
+Fake-quantizes the inputs using fixed min and max arguments.
+
+Signature
+tf.quantization.fake_quant_with_min_max_args(inputs, min=-6, max=6, num_bits=8, narrow_range=False, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

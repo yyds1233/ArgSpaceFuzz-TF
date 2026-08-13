@@ -1,0 +1,36 @@
+tf.math.atan2
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/math/atan2
+
+Summary
+Computes arctangent of y/x element-wise, respecting the quadrant.
+
+Signature
+tf.math.atan2(x, y, name=None)
+tf.math.atan2(
+    y: Annotated[Any, tf.raw_ops.Any],
+    x: Annotated[Any, tf.raw_ops.Any],
+    name=None
+) -> Annotated[Any, tf.raw_ops.Any]
+Used in the notebooks
+Used in the tutorials
+TFP Release Notes notebook (0.12.1)
+This is the angle 
+ such that
+and
+where 
+.
+
+For example:
+
+x = [1., 1.]
+y = [1., -1.]
+print((tf.math.atan2(y,x) * (180 / np.pi)).numpy())
+Args
+y	A Tensor. Must be one of the following types: bfloat16, half, float32, float64.
+x	A Tensor. Must have the same type as y.
+name	A name for the operation (optional).
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

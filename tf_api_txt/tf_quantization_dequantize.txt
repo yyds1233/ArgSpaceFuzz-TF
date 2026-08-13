@@ -1,0 +1,21 @@
+tf.quantization.dequantize
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/quantization/dequantize
+
+Summary
+TensorFlow API reference for tf.quantization.dequantize. This operation or helper is documented on the official TensorFlow API page.
+
+Signature
+tf.quantization.dequantize(
+    input,
+    min_range,
+    max_range,
+    mode="MIN_COMBINED",
+    name=None,
+    axis=None,
+    narrow_range=False,
+    dtype=dtypes.float32)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

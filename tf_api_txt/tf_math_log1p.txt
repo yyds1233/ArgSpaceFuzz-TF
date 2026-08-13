@@ -1,0 +1,13 @@
+tf.math.log1p
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/math/log1p
+
+Summary
+Computes log(1 + x) element-wise.
+
+Signature
+tf.math.log1p(x, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

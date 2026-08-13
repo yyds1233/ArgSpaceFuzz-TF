@@ -364,7 +364,7 @@ Examples:
     ap.add_argument("--llm_base_url", default="https://api.gpt.ge/v1/",
                     help="OpenAI-compatible API for resolver/rank/enrich")
     ap.add_argument("--llm_model", default="gpt-5-codex",)
-    ap.add_argument("--llm_api_key", default="sk-WXtqOuBZPY096KTcDdE866275274464d88943d068aA7Ff5d")
+    ap.add_argument("--llm_api_key", default=os.environ.get("OPENAI_API_KEY", ""))
     ap.add_argument("--no_llm", action="store_true",
                     help="disable all LLM usage (heuristic only)")
 
@@ -372,7 +372,7 @@ Examples:
     ap.add_argument("--openai_base_url", default="https://api.gpt.ge/v1/",
                     help="OpenAI API base URL for shape/constraint LLM")
     ap.add_argument("--openai_model", default="gpt-5-codex",)
-    ap.add_argument("--openai_api_key", default="sk-WXtqOuBZPY096KTcDdE866275274464d88943d068aA7Ff5d",
+    ap.add_argument("--openai_api_key", default=os.environ.get("OPENAI_API_KEY", ""),
                     help="OpenAI API key (or set OPENAI_API_KEY env)")
 
     ap.add_argument("--continue_on_error", action="store_true",

@@ -1,0 +1,22 @@
+tf.quantization.quantize
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/quantization/quantize
+
+View source on GitHub
+tensorflow/python/ops/array_ops.py:5823
+
+Signature
+tf.quantization.quantize(
+    input,
+    min_range,
+    max_range,
+    T,
+    mode="MIN_COMBINED",
+    round_mode="HALF_AWAY_FROM_ZERO",
+    name=None,
+    narrow_range=False,
+    axis=None,
+    ensure_minimum_range=0.01)
+
+Quantize the input tensor.

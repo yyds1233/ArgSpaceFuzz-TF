@@ -1,0 +1,40 @@
+tf.sparse.slice
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/sparse/slice
+
+View source on GitHub
+tensorflow/python/ops/sparse_ops.py:1138
+
+Signature
+tf.sparse.slice(sp_input, start, size, name=None)
+
+Slice a `SparseTensor` based on the `start` and `size`.
+
+For example, if the input is
+
+    input_tensor = shape = [2, 7]
+    [    a   d e  ]
+    [b c          ]
+
+Graphically the output tensors are:
+
+    sparse.slice([0, 0], [2, 4]) = shape = [2, 4]
+    [    a  ]
+    [b c    ]
+
+    sparse.slice([0, 4], [2, 3]) = shape = [2, 3]
+    [ d e  ]
+    [      ]
+
+Args:
+  sp_input: The `SparseTensor` to split.
+  start: 1-D. tensor represents the start of the slice.
+  size: 1-D. tensor represents the size of the slice.
+  name: A name for the operation (optional).
+
+Returns:
+  A `SparseTensor` objects resulting from splicing.
+
+Raises:
+  TypeError: If `sp_input` is not a `SparseTensor`.

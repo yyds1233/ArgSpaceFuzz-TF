@@ -1,0 +1,13 @@
+tf.dynamic_partition
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/dynamic_partition
+
+Summary
+Partitions data into multiple tensors according to a partitions tensor.
+
+Signature
+tf.dynamic_partition(data, partitions, num_partitions, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

@@ -1,0 +1,13 @@
+tf.signal.frame
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/signal/frame
+
+Summary
+Expands a signal into overlapping frames.
+
+Signature
+tf.signal.frame(signal, frame_length, frame_step, pad_end=False, pad_value=0, axis=-1, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

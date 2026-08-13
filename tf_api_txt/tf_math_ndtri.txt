@@ -1,0 +1,18 @@
+tf.math.ndtri
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/math/ndtri
+
+View source on GitHub
+tensorflow/python/ops/math_ops.py:5349
+
+Signature
+tf.math.ndtri(x, name=None)
+
+Compute quantile of Standard Normal.
+
+Args:
+  x: `Tensor` with type `float` or `double`.
+  name: A name for the operation (optional).
+Returns:
+  Inverse error function of `x`.

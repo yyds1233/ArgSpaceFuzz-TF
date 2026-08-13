@@ -1,0 +1,35 @@
+tf.zeros
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/zeros
+
+View source on GitHub
+tensorflow/python/ops/array_ops.py:2568
+
+Signature
+tf.zeros(shape, dtype=dtypes.float32, name=None, layout=None)
+
+Creates a tensor with all elements set to zero.
+
+See also `tf.zeros_like`, `tf.ones`, `tf.fill`, `tf.eye`.
+
+This operation returns a tensor of type `dtype` with shape `shape` and
+all elements set to zero.
+
+>>> tf.zeros([3, 4], tf.int32)
+<tf.Tensor: shape=(3, 4), dtype=int32, numpy=
+array([[0, 0, 0, 0],
+       [0, 0, 0, 0],
+       [0, 0, 0, 0]], dtype=int32)>
+
+Args:
+  shape: A `list` of integers, a `tuple` of integers, or a 1-D `Tensor` of
+    type `int32`.
+  dtype: The DType of an element in the resulting `Tensor`.
+  name: Optional string. A name for the operation.
+  layout: Optional, `tf.experimental.dtensor.Layout`. If provided, the result
+    is a [DTensor](https://www.tensorflow.org/guide/dtensor_overview) with the
+    provided layout.
+
+Returns:
+  A `Tensor` with all elements set to zero.

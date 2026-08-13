@@ -1,0 +1,13 @@
+tf.math.logical_not
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/math/logical_not
+
+Summary
+Computes the logical NOT of x element-wise.
+
+Signature
+tf.math.logical_not(x, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

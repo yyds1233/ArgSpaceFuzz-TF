@@ -1,0 +1,13 @@
+tf.reverse
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/reverse
+
+Summary
+Reverses specific dimensions of a tensor.
+
+Signature
+tf.reverse(tensor, axis, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

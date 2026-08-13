@@ -1,0 +1,13 @@
+tf.math.subtract
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/math/subtract
+
+Summary
+TensorFlow API reference for tf.math.subtract. This operation or helper is documented on the official TensorFlow API page.
+
+Signature
+tf.math.subtract(x, y, name=None)
+
+Note
+This is a concise English reference note generated in the style of the TensorFlow API docs. Use the official TensorFlow page above for the latest full argument details, examples, and return-value notes.

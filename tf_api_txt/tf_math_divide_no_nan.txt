@@ -1,0 +1,33 @@
+tf.math.divide_no_nan
+
+Official TensorFlow Docs
+https://www.tensorflow.org/api_docs/python/tf/math/divide_no_nan
+
+View source on GitHub
+tensorflow/python/ops/math_ops.py:1524
+
+Signature
+tf.math.divide_no_nan(x, y, name=None)
+
+Computes a safe divide which returns 0 if `y` (denominator) is zero.
+
+For example:
+
+>>> tf.constant(3.0) / 0.0
+<tf.Tensor: shape=(), dtype=float32, numpy=inf>
+>>> tf.math.divide_no_nan(3.0, 0.0)
+<tf.Tensor: shape=(), dtype=float32, numpy=0.0>
+
+Note that 0 is returned if `y` is 0 even if `x` is nonfinite:
+
+>>> tf.math.divide_no_nan(np.nan, 0.0)
+<tf.Tensor: shape=(), dtype=float32, numpy=0.0>
+
+Args:
+  x: A `Tensor` of a floating or integer dtype.
+  y: A `Tensor` with the same dtype as `x` and a compatible shape.
+  name: A name for the operation (optional).
+
+Returns:
+  The element-wise quotient as in `tf.math.divide(x, y)`,
+  except that division by zero produces `0.0`, not `nan`.
