@@ -1,0 +1,29 @@
+[
+  {
+    "api_name": "tf.data.Dataset.map",
+    "scenario": "tfdata_parallel_map",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["output_cardinality", "deterministic_order_when_enabled"],
+    "notes": ["With deterministic=True the output order follows the serial input order."],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.data.Dataset.interleave",
+    "scenario": "tfdata_interleave",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["output_cardinality", "deterministic_order_when_enabled"],
+    "notes": [],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.data.Dataset.from_generator",
+    "scenario": "python_callback_lifecycle",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["generator_lifecycle", "exception_propagation"],
+    "notes": [],
+    "last_verified_version": null
+  }
+]

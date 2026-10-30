@@ -70,7 +70,11 @@ class ConcurrentOraclePipeline:
         )
         self.transformer = HarnessTransformer(self.output_dir)
         self.validator = HarnessValidator(self.output_dir, python_path=sys.executable)
-        self.runner = ConcurrentRunner(self.output_dir, python_path=sys.executable)
+        self.runner = ConcurrentRunner(
+            self.output_dir,
+            python_path=sys.executable,
+            no_progress_timeout=float(self.config.execution.no_progress_timeout_seconds),
+        )
         self.oracle_engine = OracleEngine()
         self.reporter = Reporter()
 
@@ -184,21 +188,34 @@ class ConcurrentOraclePipeline:
             "errors": [],
             "output_dir": str(self.output_dir),
         }
-        if report.decision != Decision.READY:
-            summary["skipped"] = f"decision is {report.decision.value}; no plan executed"
+        if report.decision == Decision.INSUFFICIENT_INFO:
+            summary["skipped"] = "decision is INSUFFICIENT_INFO; no callable plan"
+            return summary
+        if report.decision == Decision.CONDITIONAL and not allow_unknown_contract:
+            summary["skipped"] = ("decision is CONDITIONAL; use "
+                                  "--allow-unknown-contract for exploratory execution")
+            return summary
+        if report.decision == Decision.LOW_PRIORITY:
+            summary["skipped"] = "decision is LOW_PRIORITY; no plan executed"
             return summary
         if not plans:
             summary["skipped"] = "no plans generated"
             return summary
 
         for plan in plans[:max_plans]:
-            if plan.contract_status == ContractStatus.UNSUPPORTED:
+            oracle_statuses = list((plan.oracle_contracts or {}).values())
+            has_supported = (any(s == "SUPPORTED" for s in oracle_statuses)
+                             if oracle_statuses
+                             else plan.contract_status == ContractStatus.SUPPORTED)
+            all_unsupported = (bool(oracle_statuses)
+                               and all(s == "UNSUPPORTED" for s in oracle_statuses))
+            if all_unsupported:
                 summary.setdefault("skipped_plans", []).append(
-                    {"plan_id": plan.plan_id, "reason": "contract UNSUPPORTED"})
+                    {"plan_id": plan.plan_id, "reason": "all plan oracles UNSUPPORTED"})
                 continue
-            if plan.contract_status == ContractStatus.UNKNOWN and not allow_unknown_contract:
+            if not has_supported and not allow_unknown_contract:
                 summary.setdefault("skipped_plans", []).append(
-                    {"plan_id": plan.plan_id, "reason": "contract UNKNOWN (strict mode)"})
+                    {"plan_id": plan.plan_id, "reason": "no supported oracle (strict mode)"})
                 continue
             print(f"[pipeline] plan {plan.plan_id} scenario={plan.scenario} "
                   f"config={plan.runtime.get('config_id')} "
@@ -211,16 +228,21 @@ class ConcurrentOraclePipeline:
                     continue
                 capture = self.runner.capture_cases(art, plan)
                 summary.setdefault("captures", []).append({"plan_id": plan.plan_id, **capture})
-                if capture.get("status") == "FALLBACK" and not capture.get("cases_with_target_calls"):
-                    summary["errors"].append({"plan_id": plan.plan_id, "stage": "capture",
-                                              "reason": "no target call could be captured; "
-                                                        "bytes fallback is disabled in strict P0"})
-                    continue
-                if capture.get("unsupported_target_cases"):
-                    summary["errors"].append({"plan_id": plan.plan_id, "stage": "capture",
-                                              "reason": f"{capture['unsupported_target_cases']} "
-                                                        f"case(s) use unsupported target arguments"})
-                    continue
+                if capture.get("status") != "SKIPPED":
+                    if not capture.get("cases_eligible"):
+                        summary["errors"].append({
+                            "plan_id": plan.plan_id, "stage": "capture",
+                            "reason": "no eligible replayable case; strict path does not "
+                                      "fall back to raw TestOneInput bytes",
+                            "ineligible_reasons": capture.get("ineligible_reasons", []),
+                        })
+                        continue
+                    if capture.get("cases_ineligible"):
+                        summary.setdefault("capture_warnings", []).append({
+                            "plan_id": plan.plan_id,
+                            "message": f"{capture['cases_ineligible']} ineligible case(s) skipped",
+                            "details": capture.get("ineligible_reasons", []),
+                        })
                 # Static validation only here; runner.run performs the isolated
                 # baseline and concurrent processes.
                 val = self.validate(art, plan, run_baseline=False)
@@ -233,6 +255,13 @@ class ConcurrentOraclePipeline:
                     summary["errors"].append({
                         "plan_id": plan.plan_id, "stage": "run",
                         "reason": obs.execution_status.value, "run_id": obs.run_id,
+                        "baseline_run_id": obs.baseline_run_id,
+                    })
+                if not obs.observation_complete:
+                    summary.setdefault("run_warnings", []).append({
+                        "plan_id": plan.plan_id,
+                        "message": "observation incomplete (partial/failed trials or missing baseline)",
+                        "run_id": obs.run_id,
                         "baseline_run_id": obs.baseline_run_id,
                     })
                 result = self.evaluate(obs, plan)

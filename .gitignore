@@ -69,8 +69,8 @@ build_yaml/api_list*.txt
 
 # ===== 第三方 vendored 源码（pip 安装，不入库） =====
 atheris/
-tensorflow/
-tensorflow-cov/
+/tensorflow/
+/tensorflow-cov/
 llvm18/
 tf_cov/
 tf_fuzz/

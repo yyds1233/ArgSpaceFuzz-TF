@@ -1,0 +1,20 @@
+[
+  {
+    "api_name": "tf.py_function",
+    "scenario": "python_callback_lifecycle",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["callback_count", "exception_cleanup", "gil_interaction"],
+    "notes": ["The callback executes Python code; lifecycle and exception behavior are observable."],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.numpy_function",
+    "scenario": "python_callback_lifecycle",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["callback_count", "exception_cleanup", "gil_interaction"],
+    "notes": [],
+    "last_verified_version": null
+  }
+]

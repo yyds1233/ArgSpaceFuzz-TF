@@ -16,19 +16,24 @@ def desc(value):
             "sha256": f"h-{value!r}", "value": value}
 
 
-def task(tid, input_id, value):
+def task(tid, input_id, value, status="COMPLETED"):
     return TaskObservation(
-        task_id=tid, input_id=input_id, status="COMPLETED",
-        metadata={"outputs": [{"call": "tf.x", "output": desc(value)}]},
+        task_id=tid, input_id=input_id, status=status,
+        metadata={"outputs": [{"call": "tf.x", "output": desc(value)}],
+                  "complete": status == "COMPLETED",
+                  "trials_expected": 1,
+                  "trials_completed": 1 if status == "COMPLETED" else 0},
     )
 
 
-def plan(oracles=("O2", "O3"), threads=2, contract=ContractStatus.SUPPORTED):
+def plan(oracles=("O2", "O3"), threads=2, contract=ContractStatus.SUPPORTED,
+         oracle_contracts=None):
     return ConcurrentTestPlan(
         plan_id="p1", artifact_id="a1", scenario="independent_api_calls",
         runtime={"external_threads": threads, "intra_op_threads": 1, "inter_op_threads": 1,
                  "tf_data_parallel_calls": 1, "config_id": "C03"},
         oracles=list(oracles), contract_status=contract,
+        oracle_contracts=oracle_contracts or {},
     )
 
 
@@ -101,6 +106,34 @@ class TestOracleEngine(unittest.TestCase):
                                  plan(oracles=("O3",)))
         by = {e.oracle_id: e for e in r.oracle_results}
         self.assertEqual(by["O2"].status, OracleStatus.NOT_APPLICABLE)
+
+    def test_per_oracle_contract_gate(self):
+        r = self.engine.evaluate(
+            obs([task(0, "case_000", [1.0]), task(1, "case_001", [99.0])]),
+            plan(contract=ContractStatus.UNKNOWN,
+                 oracle_contracts={"O2": "SUPPORTED", "O3": "UNKNOWN"}),
+        )
+        by = {e.oracle_id: e for e in r.oracle_results}
+        self.assertEqual(by["O2"].status, OracleStatus.VIOLATION)
+        self.assertEqual(by["O3"].status, OracleStatus.INCONCLUSIVE)
+
+    def test_partial_trial_is_inconclusive(self):
+        r = self.engine.evaluate(
+            obs([task(0, "case_000", [1.0]),
+                 task(1, "case_001", [2.0], status="PARTIAL")]),
+            plan(),
+        )
+        by = {e.oracle_id: e for e in r.oracle_results}
+        self.assertEqual(by["O2"].status, OracleStatus.INCONCLUSIVE)
+        self.assertEqual(by["O3"].status, OracleStatus.INCONCLUSIVE)
+
+    def test_structural_problem_is_inconclusive(self):
+        r = self.engine.evaluate(
+            obs([task(0, "case_000", [1.0])]), plan(threads=2),
+        )
+        by = {e.oracle_id: e for e in r.oracle_results}
+        self.assertEqual(by["O3"].status, OracleStatus.INCONCLUSIVE)
+        self.assertIn("observation_integrity", by["O3"].evidence)
 
     def test_missing_oracle_explicit(self):
         r = self.engine.evaluate(obs([task(0, "case_000", [1.0]), task(1, "case_001", [2.0])]),

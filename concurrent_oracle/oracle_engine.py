@@ -47,7 +47,7 @@ class OracleEngine:
                 entry = oracle.evaluate(plan, observation, context)
                 entries.append(entry)
                 if entry.status == OracleStatus.VIOLATION:
-                    for key in ("stdout", "stderr"):
+                    for key in ("stdout", "stderr", "events"):
                         p = (observation.diagnostics or {}).get(key)
                         if p:
                             failure_artifacts.append(str(p))

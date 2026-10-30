@@ -6,6 +6,7 @@ from pathlib import Path
 from concurrent_oracle.pipeline import ConcurrentOraclePipeline
 
 REAL = Path(__file__).resolve().parent / "fixtures" / "llm.tf.math.log1p.py"
+UNKNOWN_CONTRACT = Path(__file__).resolve().parent / "fixtures" / "llm.tf.math.exp.py"
 
 
 @unittest.skipUnless(os.environ.get("CO_RUN_TF_TESTS") == "1", "set CO_RUN_TF_TESTS=1")
@@ -29,6 +30,8 @@ class TestPipelineSmoke(unittest.TestCase):
             # separate processes; trials must reach the execution loop.
             cap = summary["captures"][0]
             self.assertGreaterEqual(cap["cases_with_target_calls"], 1)
+            self.assertGreaterEqual(cap["cases_eligible"], 1)
+            self.assertEqual(cap["cases_ineligible"], 0)
             self.assertNotEqual(r["baseline_run_id"], r["test_run_id"])
             self.assertEqual(r["trials"], 10)
             plan_id = r["plan_id"]
@@ -43,10 +46,33 @@ class TestPipelineSmoke(unittest.TestCase):
             self.assertNotEqual(b["runtime"]["pid"], t_obs["runtime"]["pid"])
             self.assertEqual(b["trials"], 10)
             self.assertEqual(t_obs["trials"], 10)
+            self.assertEqual(t_obs["runtime"]["deterministic_requested"], True)
+            self.assertEqual(t_obs["runtime"]["deterministic_applied"], True)
             combined = json.loads((test_dirs[-1] / "combined_observation.json").read_text())
             self.assertTrue(combined["baseline"])
             self.assertEqual(combined["baseline_run_id"], b["run_id"])
             self.assertEqual(combined["test_run_id"], t_obs["run_id"])
+            event_names = []
+            events_path = test_dirs[-1] / "events.jsonl"
+            if events_path.exists():
+                with open(events_path, encoding="utf-8") as f:
+                    event_names = [json.loads(line)["event"] for line in f if line.strip()]
+            for required in ("ARG_REBUILD_START", "ARG_REBUILD_END",
+                             "TARGET_ENTER", "TARGET_RETURN",
+                             "DESCRIBE_START", "DESCRIBE_END",
+                             "BARRIER_WAIT", "BARRIER_RELEASED",
+                             "TASK_FINISHED"):
+                self.assertIn(required, event_names)
+
+    def test_explore_mode_runs_unknown_contract(self):
+        with tempfile.TemporaryDirectory() as td:
+            pipeline = ConcurrentOraclePipeline(output_dir=td)
+            summary = pipeline.run_harness(UNKNOWN_CONTRACT, max_plans=1,
+                                           allow_unknown_contract=True)
+            self.assertEqual(summary["decision"], "CONDITIONAL")
+            self.assertTrue(summary["captures"], summary)
+            self.assertGreaterEqual(len(summary["results"]), 1, summary)
+            self.assertGreaterEqual(summary["captures"][0]["cases_with_target_calls"], 1)
 
     def test_shared_readonly_backend(self):
         with tempfile.TemporaryDirectory() as td:

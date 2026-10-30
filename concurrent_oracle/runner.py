@@ -33,10 +33,12 @@ class ConcurrentRunner:
         python_path: Optional[str] = None,
         preload_path: Optional[str] = ASAN_SO,
         timeout_grace: int = 30,
+        no_progress_timeout: float = 20.0,
     ):
         self.output_dir = Path(output_dir).resolve()
         self.python_path = python_path or sys.executable
         self.timeout_grace = timeout_grace
+        self.no_progress_timeout = no_progress_timeout
         self.pm = ProcessManager(self.python_path, preload_path=preload_path)
         self.case_capture = CaseCapture(self.output_dir)
 
@@ -45,7 +47,7 @@ class ConcurrentRunner:
     def cases_path(self, plan: ConcurrentTestPlan) -> Path:
         return self.output_dir / "captured_cases" / plan.plan_id / "cases.json"
 
-    def _has_target_calls(self, plan: ConcurrentTestPlan) -> bool:
+    def _has_eligible_cases(self, plan: ConcurrentTestPlan) -> bool:
         p = self.cases_path(plan)
         if not p.exists():
             return False
@@ -53,7 +55,11 @@ class ConcurrentRunner:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             return False
-        return any(c.get("target_calls") for c in data.get("cases", []))
+        cases = data.get("cases", [])
+        flagged = [c for c in cases if "eligible" in c]
+        if flagged:
+            return any(c.get("eligible") for c in flagged)
+        return any(c.get("target_calls") for c in cases)
 
     def _run_dirs(self, plan: ConcurrentTestPlan, mode: str, run_id: str) -> Dict[str, Path]:
         d = self.output_dir / "executions" / plan.plan_id / mode / run_id
@@ -89,6 +95,7 @@ class ConcurrentRunner:
             "config_id": config_id,
             "mode": mode,
             "state_model": plan.state_model,
+            "seed": int(plan.metadata.get("seed", 0)),
             "trials": int(trials),
             "runtime": runtime,
             "cases_path": str(self.cases_path(plan)),
@@ -101,6 +108,8 @@ class ConcurrentRunner:
             [self.python_path, str(harness), str(paths["cfg"])],
             cwd=paths["dir"],
             timeout=plan.timeout_seconds + self.timeout_grace,
+            events_path=paths["events"],
+            no_progress_timeout=self.no_progress_timeout,
         )
         paths["stdout"].write_text(pr.stdout or "", encoding="utf-8")
         paths["stderr"].write_text(pr.stderr or "", encoding="utf-8")
@@ -132,6 +141,10 @@ class ConcurrentRunner:
                     "stderr": str(paths["stderr"]),
                     "events": str(paths["events"]),
                     "duration": pr.duration,
+                    "no_progress": pr.no_progress,
+                    "last_event": pr.last_event,
+                    "last_event_age": pr.last_event_age,
+                    "stack_signal_sent": pr.stack_signal_sent,
                 },
                 harness_path=str(harness),
                 config=cfg,
@@ -197,7 +210,11 @@ class ConcurrentRunner:
                 diagnostics={"stdout": str(paths["stdout"]),
                              "stderr": str(paths["stderr"]),
                              "events": str(paths["events"]),
-                             "duration": pr.duration},
+                             "duration": pr.duration,
+                             "no_progress": pr.no_progress,
+                             "last_event": pr.last_event,
+                             "last_event_age": pr.last_event_age,
+                             "stack_signal_sent": pr.stack_signal_sent},
                 harness_path=str(harness),
                 config=cfg,
                 stdout_path=str(paths["stdout"]),
@@ -216,7 +233,7 @@ class ConcurrentRunner:
         plan: ConcurrentTestPlan,
         force: bool = False,
     ) -> Dict[str, Any]:
-        if not force and self._has_target_calls(plan):
+        if not force and self._has_eligible_cases(plan):
             return {"status": "SKIPPED", "reason": "cases already contain target_calls"}
         run_id = _new_run_id("capture")
         runtime = dict(plan.runtime)
@@ -235,22 +252,37 @@ class ConcurrentRunner:
             plan.plan_id, captured,
             metadata={"capture_run_id": run_id, "capture_status": obs.execution_status.value},
         )
-        n_target = sum(1 for c in captured.values() if c.get("target_calls"))
+        merged_data = json.loads(merged.read_text(encoding="utf-8"))
+        merged_cases = merged_data.get("cases", [])
+        n_target = sum(1 for c in merged_cases if c.get("target_calls"))
+        eligible = [c for c in merged_cases if c.get("eligible")]
+        ineligible = [c for c in merged_cases if "eligible" in c and not c.get("eligible")]
         n_unsupported = count_unsupported_target_cases(captured)
+        conversion_cases = [
+            {"case_id": c.get("case_id"), "conversions": c.get("arg_conversions")}
+            for c in merged_cases if c.get("arg_conversions")
+        ]
         return {
-            "status": "CAPTURED" if n_target else "FALLBACK",
+            "status": "CAPTURED" if eligible else "FALLBACK",
             "unsupported_target_cases": n_unsupported,
             "run_id": run_id,
             "cases_path": str(merged),
             "cases_with_target_calls": n_target,
-            "cases_total": len(captured),
+            "cases_eligible": len(eligible),
+            "cases_ineligible": len(ineligible),
+            "ineligible_reasons": [
+                {"case_id": c.get("case_id"), "reason": c.get("ineligible_reason")}
+                for c in ineligible[:20]
+            ],
+            "conversion_cases": conversion_cases,
+            "cases_total": len(merged_cases),
             "execution": str(paths["execution"]),
         }
 
     # ── full baseline + concurrent run ─────────────────────────
 
     def run(self, artifact: ConcurrentHarnessArtifact, plan: ConcurrentTestPlan) -> ExecutionObservation:
-        if not self._has_target_calls(plan):
+        if not self._has_eligible_cases(plan):
             self.capture_cases(artifact, plan)
 
         trials = max(1, int(plan.trials))

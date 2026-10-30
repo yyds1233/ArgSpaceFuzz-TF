@@ -3,7 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from concurrent_oracle.case_capture import CaseCapture, count_unsupported_target_cases
+from concurrent_oracle.case_capture import (
+    CaseCapture,
+    check_case_eligibility,
+    count_unsupported_target_cases,
+)
 
 
 class TestCaseCapture(unittest.TestCase):
@@ -35,6 +39,46 @@ class TestCaseCapture(unittest.TestCase):
                 }
             }
             self.assertEqual(count_unsupported_target_cases(unsupported), 1)
+
+    def test_case_eligibility(self):
+        good = {
+            "target_calls": [{
+                "call": "tf.math.log1p",
+                "args": [{"kind": "tensor", "dtype": "float32", "shape": [2],
+                          "value": [1.0, 2.0], "sha256": "abc"}],
+                "kwargs": {},
+            }]
+        }
+        self.assertTrue(check_case_eligibility(good)["eligible"])
+        truncated = {
+            "target_calls": [{
+                "call": "tf.math.log1p",
+                "args": [{"kind": "tensor", "dtype": "float32", "shape": [2],
+                          "value": None, "value_truncated": True, "sha256": "abc"}],
+                "kwargs": {},
+            }]
+        }
+        self.assertFalse(check_case_eligibility(truncated)["eligible"])
+        unsupported = {
+            "target_calls": [{
+                "call": "tf.x",
+                "args": [{"kind": "unsupported_input", "type": "Variable"}],
+                "kwargs": {},
+            }]
+        }
+        self.assertFalse(check_case_eligibility(unsupported)["eligible"])
+        ndarray = {
+            "target_calls": [{
+                "call": "tf.x",
+                "args": [{"kind": "ndarray", "dtype": "float32", "shape": [1],
+                          "value": [1.0], "sha256": "abc"}],
+                "kwargs": {},
+            }]
+        }
+        r = check_case_eligibility(ndarray)
+        self.assertTrue(r["eligible"])
+        self.assertEqual(r["conversions"], ["ndarray_to_tensor"])
+        self.assertFalse(check_case_eligibility({"target_calls": []})["eligible"])
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ class WatchdogState:
 
 class Watchdog:
     def __init__(self, process_timeout_seconds: float = 60, no_progress_timeout_seconds: float = 20):
-        now = time.time()
+        now = time.monotonic()
         self.state = WatchdogState(
             started_at=now,
             last_progress_at=now,
@@ -25,13 +25,13 @@ class Watchdog:
         )
 
     def beat(self) -> None:
-        self.state.last_progress_at = time.time()
+        self.state.last_progress_at = time.monotonic()
 
     def process_expired(self) -> bool:
-        return (time.time() - self.state.started_at) > self.state.process_timeout
+        return (time.monotonic() - self.state.started_at) > self.state.process_timeout
 
     def no_progress_expired(self) -> bool:
-        return (time.time() - self.state.last_progress_at) > self.state.no_progress_timeout
+        return (time.monotonic() - self.state.last_progress_at) > self.state.no_progress_timeout
 
     def check(self) -> Optional[str]:
         if self.process_expired():

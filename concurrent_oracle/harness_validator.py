@@ -127,6 +127,7 @@ class HarnessValidator:
             "config_id": "serial_baseline",
             "mode": "baseline",
             "state_model": plan.state_model,
+            "seed": int(plan.metadata.get("seed", 0)),
             "trials": 1,
             "runtime": runtime,
             "cases_path": str(cases_path),
@@ -177,7 +178,9 @@ class HarnessValidator:
         baseline = obs.get("baseline") or {}
         completed = [k for k, v in baseline.items()
                      if isinstance(v, dict) and v.get("status") == "COMPLETED" and v.get("outputs")]
-        ok = obs.get("execution_status") == "COMPLETED" and bool(completed)
+        ok = (obs.get("execution_status") == "COMPLETED"
+              and bool(obs.get("observation_complete"))
+              and bool(completed))
         return {
             "ok": ok,
             "rc": r.returncode,

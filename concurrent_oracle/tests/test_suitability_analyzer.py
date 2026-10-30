@@ -37,7 +37,9 @@ class TestSuitabilityAndPlans(unittest.TestCase):
 
     def test_generate_plans(self):
         report = self.analyzer.analyze(self.artifact, self.analysis)
-        gen = ScenarioGenerator(config=ModuleConfig(), contract_registry=self.registry)
+        cfg = ModuleConfig()
+        cfg.runtime.deterministic = [True]
+        gen = ScenarioGenerator(config=cfg, contract_registry=self.registry)
         plans = gen.generate(report, api_name=self.artifact.api_name)
         self.assertEqual(len(plans), 4)
         # First pass covers each scenario once, before expanding configurations.
@@ -68,7 +70,9 @@ class TestSuitabilityAndPlans(unittest.TestCase):
                 CandidateScenario("shared_readonly_input", ["O3", "O4"], "SHARED_READONLY", "MEDIUM", "y"),
             ],
         )
-        plans = ScenarioGenerator(config=ModuleConfig(), contract_registry=reg).generate(
+        cfg = ModuleConfig()
+        cfg.runtime.deterministic = [True]
+        plans = ScenarioGenerator(config=cfg, contract_registry=reg).generate(
             report, api_name="tf.test.mixed")
         by = {(p.scenario, p.runtime["config_id"]): p for p in plans}
         self.assertEqual(by[("independent_api_calls", "C03")].contract_status, ContractStatus.SUPPORTED)
@@ -81,6 +85,7 @@ class TestSuitabilityAndPlans(unittest.TestCase):
         cfg.runtime.intra_op_threads = [1]
         cfg.runtime.inter_op_threads = [1]
         cfg.runtime.tf_data_parallel_calls = [1]
+        cfg.runtime.deterministic = [True]
         gen = ScenarioGenerator(config=cfg, contract_registry=self.registry)
         configs = gen.generate_runtime_configs("independent_api_calls")
         self.assertEqual([c["config_id"] for c in configs], ["C03"])
@@ -100,6 +105,18 @@ class TestSuitabilityAndPlans(unittest.TestCase):
         self.assertEqual(plans, [])
         self.assertIn("shared_resource_access", gen.last_skipped)
         self.assertIn("P1", gen.last_skipped["shared_resource_access"])
+
+    def test_deterministic_variants(self):
+        cfg = ModuleConfig()
+        cfg.runtime.external_threads = [1, 2]
+        cfg.runtime.intra_op_threads = [1]
+        cfg.runtime.inter_op_threads = [1]
+        cfg.runtime.tf_data_parallel_calls = [1]
+        cfg.runtime.deterministic = [True, False]
+        gen = ScenarioGenerator(config=cfg, contract_registry=self.registry)
+        configs = gen.generate_runtime_configs("independent_api_calls")
+        self.assertEqual([c["deterministic"] for c in configs], [True, False])
+        self.assertEqual([c["config_id"] for c in configs], ["C03_det1", "C03_det0"])
 
     def test_conditional_for_unknown_contract(self):
         report = self.analyzer.analyze(self.artifact, self.analysis)

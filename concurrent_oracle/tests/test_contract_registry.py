@@ -7,6 +7,22 @@ CONTRACTS = Path(__file__).resolve().parents[1] / "contracts" / "tensorflow"
 
 
 class TestContractRegistry(unittest.TestCase):
+    def test_repo_contracts_are_present_and_load_cleanly(self):
+        reg = ContractRegistry(CONTRACTS)
+        self.assertGreaterEqual(len(reg.all_contracts()), 5)
+        self.assertEqual(reg.load_errors, [])
+
+    def test_contracts_wrapper_and_api_map_errors_are_reported(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "wrapped.json"
+            p.write_text(json.dumps({"contracts": [{"api_name": "x", "status": "BAD"}]}),
+                         encoding="utf-8")
+            reg = ContractRegistry(td)
+            self.assertTrue(any("wrapped.json" in e for e in reg.load_errors))
+            self.assertEqual(reg.all_contracts(), [])
+
     def test_missing_and_invalid_contract_sources_are_reported(self):
         missing = ContractRegistry("/tmp/definitely-missing-contracts-dir")
         self.assertTrue(missing.load_errors)

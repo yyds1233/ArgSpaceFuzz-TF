@@ -18,10 +18,12 @@ Modes:
 from __future__ import annotations
 
 import base64
+import faulthandler
 import hashlib
 import importlib.util
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -36,6 +38,15 @@ DEFAULT_CASES = __DEFAULT_CASES__
 _PATCH_STATE = threading.local()
 _EVENT_LOCK = threading.Lock()
 _EVENTS_PATH: Optional[str] = None
+_DETERMINISM_STATE: Dict[str, Any] = {}
+
+# The parent sends SIGUSR1 before killing a stalled process; the stack dump
+# goes to stderr, which the runner captures in stderr.log.
+faulthandler.enable()
+try:
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
+except Exception:
+    pass
 
 
 # ── events / serialization ─────────────────────────────────────
@@ -164,6 +175,27 @@ def _describe_input(value: Any) -> Dict[str, Any]:
         else:
             desc["value_truncated"] = True
         return desc
+    if isinstance(value, tf.DType):
+        return {"kind": "dtype", "name": value.name}
+    if isinstance(value, tf.TensorShape):
+        return {"kind": "tensor_shape", "dims": list(value.as_list())}
+    if isinstance(value, tf.SparseTensor):
+        return {
+            "kind": "sparse_tensor",
+            "dtype": value.dtype.name,
+            "dense_shape": [int(x) for x in value.dense_shape.numpy().tolist()],
+            "indices": _jsonable(value.indices.numpy()),
+            "values": _jsonable(value.values.numpy()),
+        }
+    if isinstance(value, tf.RaggedTensor):
+        return {
+            "kind": "ragged_tensor",
+            "dtype": value.dtype.name,
+            "flat_values": _describe_input(value.flat_values),
+            "nested_row_splits": [_jsonable(x.numpy()) for x in value.nested_row_splits],
+        }
+    if isinstance(value, np.generic):
+        return {"kind": "python", "value": _jsonable(value.item())}
     if isinstance(value, np.ndarray):
         return {
             "kind": "ndarray",
@@ -183,6 +215,8 @@ def _describe_input(value: Any) -> Dict[str, Any]:
 
 
 def _from_jsonable(value: Any, dtype: Any = None) -> Any:
+    if isinstance(value, dict) and set(value.keys()) == {"__bytes_b64__"}:
+        return base64.b64decode(value["__bytes_b64__"])
     if isinstance(value, dict) and set(value.keys()) == {"real", "imag"}:
         return complex(value["real"], value["imag"])
     if isinstance(value, list):
@@ -200,7 +234,26 @@ def _reconstruct_arg(desc: Dict[str, Any], tf):
             raise ValueError("captured argument is truncated and cannot be replayed")
         dtype = desc.get("dtype")
         shape = desc.get("shape")
-        return tf.constant(_from_jsonable(value, dtype), dtype=dtype, shape=shape)
+        tensor = tf.constant(_from_jsonable(value, dtype), dtype=dtype, shape=shape)
+        if desc.get("sha256"):
+            actual = _array_sha256(tensor.numpy())
+            if actual != desc["sha256"]:
+                raise ValueError("reconstructed argument digest mismatch")
+        return tensor
+    if kind == "dtype":
+        return tf.dtypes.as_dtype(desc.get("name"))
+    if kind == "tensor_shape":
+        return tf.TensorShape(desc.get("dims"))
+    if kind == "sparse_tensor":
+        return tf.sparse.SparseTensor(
+            indices=tf.constant(desc.get("indices"), dtype=tf.int64),
+            values=tf.constant(_from_jsonable(desc.get("values")), dtype=desc.get("dtype")),
+            dense_shape=tf.constant(desc.get("dense_shape"), dtype=tf.int64),
+        )
+    if kind == "ragged_tensor":
+        flat = _reconstruct_arg(desc.get("flat_values") or {}, tf)
+        splits = [tf.constant(x, dtype=tf.int64) for x in (desc.get("nested_row_splits") or [])]
+        return tf.RaggedTensor.from_nested_row_splits(flat, splits)
     if kind in ("list", "tuple", "dict"):
         items = desc.get("items")
         if kind == "dict":
@@ -268,13 +321,18 @@ def _patch_targets(tf) -> Dict[str, Any]:
                            type=type(exc).__name__)
                     raise
                 if rec is not None:
+                    _event("TARGET_RETURN", call=call_name, task_id=rec.get("task_id"),
+                           trial_id=rec.get("trial_id"), call_index=call_index)
+                    _event("DESCRIBE_START", call=call_name, task_id=rec.get("task_id"),
+                           trial_id=rec.get("trial_id"), call_index=call_index)
+                    described = _safe_describe(out)
+                    _event("DESCRIBE_END", call=call_name, task_id=rec.get("task_id"),
+                           trial_id=rec.get("trial_id"), call_index=call_index)
                     rec["outputs"].append({
                         "call": call_name, "trial_id": rec.get("trial_id"),
                         "call_index": call_index,
-                        "output": _safe_describe(out),
+                        "output": described,
                     })
-                    _event("TARGET_RETURN", call=call_name, task_id=rec.get("task_id"),
-                           trial_id=rec.get("trial_id"), call_index=call_index)
                 return out
             return wrapper
 
@@ -293,7 +351,7 @@ def _unpatch_targets(originals: Dict[str, Any]) -> None:
 
 # ── runtime / cases ────────────────────────────────────────────
 
-def _setup_tf(runtime: Dict[str, Any]):
+def _setup_tf(runtime: Dict[str, Any], mode: str = "concurrent", seed: int = 0):
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
     import tensorflow as tf
@@ -303,14 +361,38 @@ def _setup_tf(runtime: Dict[str, Any]):
     tf.config.threading.set_intra_op_parallelism_threads(intra)
     tf.config.threading.set_inter_op_parallelism_threads(inter)
     det = runtime.get("deterministic")
+    _DETERMINISM_STATE.clear()
+    _DETERMINISM_STATE.update({
+        "deterministic_requested": det,
+        "deterministic_applied": None,
+        "deterministic_error": None,
+        "deterministic_method": None,
+        "seed": None,
+    })
     if det is not None:
         try:
             if bool(det):
                 tf.config.experimental.enable_op_determinism()
-            else:
+                _DETERMINISM_STATE["deterministic_method"] = "enable_op_determinism"
+            elif hasattr(tf.config.experimental, "disable_op_determinism"):
                 tf.config.experimental.disable_op_determinism()
-        except Exception:
-            pass
+                _DETERMINISM_STATE["deterministic_method"] = "disable_op_determinism"
+            else:
+                # A fresh process starts with op determinism disabled.
+                _DETERMINISM_STATE["deterministic_method"] = "default_disabled"
+            _DETERMINISM_STATE["deterministic_applied"] = True
+        except Exception as exc:
+            _DETERMINISM_STATE["deterministic_applied"] = False
+            _DETERMINISM_STATE["deterministic_error"] = f"{type(exc).__name__}: {exc}"
+    if mode == "capture":
+        # Freeze random construction in the single-threaded capture phase.
+        try:
+            tf.random.set_seed(int(seed))
+            _DETERMINISM_STATE["seed"] = int(seed)
+        except Exception as exc:
+            _DETERMINISM_STATE["deterministic_error"] = (
+                f"seed setup failed: {type(exc).__name__}: {exc}"
+            )
     gpus = tf.config.list_physical_devices("GPU")
     if runtime.get("require_cpu_only", True) and gpus:
         raise RuntimeError(f"CPU-only test expected, but GPU devices are visible: {gpus}")
@@ -320,7 +402,8 @@ def _setup_tf(runtime: Dict[str, Any]):
 def _load_cases(case_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     path = case_config.get("cases_path")
     if path and os.path.exists(path):
-        data = json.loads(open(path, "r", encoding="utf-8").read())
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
         cases = data.get("cases", [])
         out = []
         for i, c in enumerate(cases):
@@ -331,8 +414,26 @@ def _load_cases(case_config: Dict[str, Any]) -> List[Dict[str, Any]]:
                 item["data_b64"] = base64.b64encode(bytes(c["data"])).decode("ascii")
             if c.get("target_calls"):
                 item["target_calls"] = c["target_calls"]
+            if "eligible" in c:
+                item["eligible"] = bool(c["eligible"])
+            if c.get("ineligible_reason"):
+                item["ineligible_reason"] = c["ineligible_reason"]
+            if c.get("arg_conversions"):
+                item["arg_conversions"] = c["arg_conversions"]
+            if c.get("case_source"):
+                item["case_source"] = c["case_source"]
             out.append(item)
         if out:
+            flagged = [c for c in out if "eligible" in c]
+            if flagged:
+                eligible = [c for c in out if c.get("eligible")]
+                skipped = [c for c in out if not c.get("eligible")]
+                if skipped:
+                    _event("SKIPPED_INELIGIBLE_CASES", count=len(skipped),
+                           reasons=[c.get("ineligible_reason") for c in skipped[:20]])
+                if not eligible:
+                    raise RuntimeError("no eligible captured cases can be replayed")
+                out = eligible
             return out
     return [{"case_id": f"case_{i:03d}", "data_b64": x} for i, x in enumerate(DEFAULT_CASES)]
 
@@ -354,6 +455,9 @@ def _new_record(task_id: int, input_id: str, trial_id: int, capture_args: bool =
         "calls": [],
         "capture_args": capture_args,
         "call_index": 0,
+        "expected_calls": None,
+        "actual_calls": 0,
+        "complete": False,
         "started_at": time.time(),
         "finished_at": None,
     }
@@ -374,8 +478,10 @@ def _build_shared_calls(case: Dict[str, Any], originals: Dict[str, Any], tf) -> 
 
 def _invoke_once(module, case: Dict[str, Any], task_id: int, trial_id: int,
                  originals: Dict[str, Any], tf, capture_args: bool = False,
-                 shared_calls: Optional[List[Any]] = None) -> Dict[str, Any]:
+                 shared_calls: Optional[List[Any]] = None,
+                 expected_calls: Optional[int] = None) -> Dict[str, Any]:
     rec = _new_record(task_id, case["case_id"], trial_id, capture_args)
+    rec["expected_calls"] = expected_calls
     _PATCH_STATE.record = rec
     try:
         if shared_calls is not None:
@@ -388,12 +494,17 @@ def _invoke_once(module, case: Dict[str, Any], task_id: int, trial_id: int,
                        trial_id=trial_id, call_index=call_index)
                 try:
                     out = original(*args, **kwargs)
-                    rec["outputs"].append({
-                        "call": dotted, "trial_id": trial_id, "call_index": call_index,
-                        "output": _safe_describe(out),
-                    })
                     _event("TARGET_RETURN", call=dotted, task_id=task_id,
                            trial_id=trial_id, call_index=call_index)
+                    _event("DESCRIBE_START", call=dotted, task_id=task_id,
+                           trial_id=trial_id, call_index=call_index)
+                    described = _safe_describe(out)
+                    _event("DESCRIBE_END", call=dotted, task_id=task_id,
+                           trial_id=trial_id, call_index=call_index)
+                    rec["outputs"].append({
+                        "call": dotted, "trial_id": trial_id, "call_index": call_index,
+                        "output": described,
+                    })
                 except Exception as exc:
                     rec["exceptions"].append({
                         "call": dotted, "trial_id": trial_id, "call_index": call_index,
@@ -412,18 +523,27 @@ def _invoke_once(module, case: Dict[str, Any], task_id: int, trial_id: int,
                 original = originals[dotted][2]
                 rec["call_index"] = int(rec.get("call_index", 0)) + 1
                 call_index = rec["call_index"]
-                _event("TARGET_ENTER", call=dotted, task_id=task_id,
-                       trial_id=trial_id, call_index=call_index)
                 try:
+                    _event("ARG_REBUILD_START", call=dotted, task_id=task_id,
+                           trial_id=trial_id, call_index=call_index)
                     args = [_reconstruct_arg(a, tf) for a in spec.get("args", [])]
                     kwargs = {k: _reconstruct_arg(v, tf) for k, v in (spec.get("kwargs") or {}).items()}
+                    _event("ARG_REBUILD_END", call=dotted, task_id=task_id,
+                           trial_id=trial_id, call_index=call_index)
+                    _event("TARGET_ENTER", call=dotted, task_id=task_id,
+                           trial_id=trial_id, call_index=call_index)
                     out = original(*args, **kwargs)
-                    rec["outputs"].append({
-                        "call": dotted, "trial_id": trial_id, "call_index": call_index,
-                        "output": _safe_describe(out),
-                    })
                     _event("TARGET_RETURN", call=dotted, task_id=task_id,
                            trial_id=trial_id, call_index=call_index)
+                    _event("DESCRIBE_START", call=dotted, task_id=task_id,
+                           trial_id=trial_id, call_index=call_index)
+                    described = _safe_describe(out)
+                    _event("DESCRIBE_END", call=dotted, task_id=task_id,
+                           trial_id=trial_id, call_index=call_index)
+                    rec["outputs"].append({
+                        "call": dotted, "trial_id": trial_id, "call_index": call_index,
+                        "output": described,
+                    })
                 except Exception as exc:
                     rec["exceptions"].append({
                         "call": dotted, "trial_id": trial_id, "call_index": call_index,
@@ -449,16 +569,57 @@ def _invoke_once(module, case: Dict[str, Any], task_id: int, trial_id: int,
         })
     finally:
         rec["finished_at"] = time.time()
+        rec["actual_calls"] = len(rec.get("outputs") or []) + len(rec.get("exceptions") or [])
+        rec["complete"] = bool(
+            not rec.get("exceptions")
+            and rec.get("status") == "COMPLETED"
+            and (expected_calls is None or len(rec.get("outputs") or []) == expected_calls)
+        )
         rec.pop("capture_args", None)
         _PATCH_STATE.record = None
     return rec
 
 
+def _summarize_trial_status(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(records)
+    complete_trials = sum(1 for r in records if r.get("complete"))
+    failed_trials = sum(1 for r in records if r.get("status") == "EXCEPTION")
+    no_target_trials = sum(1 for r in records if r.get("status") == "NO_TARGET_CALL")
+    if total > 0 and complete_trials == total:
+        status = "COMPLETED"
+    elif complete_trials > 0:
+        status = "PARTIAL"
+    elif failed_trials > 0:
+        status = "EXCEPTION"
+    else:
+        status = "NO_TARGET_CALL"
+    return {
+        "status": status,
+        "complete": total > 0 and complete_trials == total,
+        "trials_expected": total,
+        "trials_completed": complete_trials,
+        "trials_failed": failed_trials,
+        "trials_no_target": no_target_trials,
+        "trial_status_counts": {
+            "COMPLETED": sum(1 for r in records if r.get("status") == "COMPLETED"),
+            "EXCEPTION": failed_trials,
+            "NO_TARGET_CALL": no_target_trials,
+        },
+    }
+
+
 def _invoke(module, case: Dict[str, Any], task_id: int, trials: int,
             originals: Dict[str, Any], tf, capture_args: bool = False,
             shared_calls: Optional[List[Any]] = None) -> Dict[str, Any]:
+    if shared_calls is not None:
+        expected_calls = len(shared_calls)
+    elif case.get("target_calls"):
+        expected_calls = len(case.get("target_calls") or [])
+    else:
+        expected_calls = None
     records = [
-        _invoke_once(module, case, task_id, trial_id, originals, tf, capture_args, shared_calls)
+        _invoke_once(module, case, task_id, trial_id, originals, tf, capture_args,
+                     shared_calls, expected_calls)
         for trial_id in range(trials)
     ]
     outputs: List[Dict[str, Any]] = []
@@ -466,20 +627,23 @@ def _invoke(module, case: Dict[str, Any], task_id: int, trials: int,
     for r in records:
         outputs.extend(r.get("outputs") or [])
         exceptions.extend(r.get("exceptions") or [])
-    if any(r.get("status") == "COMPLETED" for r in records):
-        status = "COMPLETED"
-    elif exceptions:
-        status = "EXCEPTION"
-    else:
-        status = "NO_TARGET_CALL"
+    summary = _summarize_trial_status(records)
     calls: List[Dict[str, Any]] = []
     for r in records:
         calls.extend(r.get("calls") or [])
     return {
         "task_id": task_id,
         "input_id": case["case_id"],
-        "status": status,
+        "status": summary["status"],
+        "complete": summary["complete"],
         "trials": trials,
+        "trials_expected": summary["trials_expected"],
+        "trials_completed": summary["trials_completed"],
+        "trials_failed": summary["trials_failed"],
+        "trial_status_counts": summary["trial_status_counts"],
+        "expected_calls": (expected_calls * trials) if expected_calls is not None else None,
+        "actual_calls": len(outputs) + len(exceptions),
+        "arg_conversions": case.get("arg_conversions") or [],
         "trial_records": records,
         "outputs": outputs,
         "exceptions": exceptions,
@@ -495,6 +659,7 @@ def _worker(module, task_id: int, case: Dict[str, Any], barrier, results, lock,
         "task_id": task_id,
         "input_id": case["case_id"],
         "status": "PENDING",
+        "complete": False,
         "trials": trials,
         "outputs": [],
         "exceptions": [],
@@ -502,7 +667,9 @@ def _worker(module, task_id: int, case: Dict[str, Any], barrier, results, lock,
         "finished_at": None,
     }
     try:
+        _event("BARRIER_WAIT", task_id=task_id, input_id=case["case_id"])
         barrier.wait(timeout=30)
+        _event("BARRIER_RELEASED", task_id=task_id, input_id=case["case_id"])
         _event("TASK_STARTED", task_id=task_id, input_id=case["case_id"])
         rec["started_at"] = time.time()
         item = _invoke(module, case, task_id, trials, originals, tf,
@@ -530,7 +697,8 @@ def run_case(case_config: Dict[str, Any]) -> Dict[str, Any]:
         mode = "capture"
     trials = max(1, int(case_config.get("trials", 1)))
     runtime = dict(case_config.get("runtime") or {})
-    tf = _setup_tf(runtime)
+    seed = int(case_config.get("seed", 0))
+    tf = _setup_tf(runtime, mode, seed)
     _event("FRAMEWORK_READY", tf_version=getattr(tf, "__version__", None),
            pid=os.getpid(), mode=mode, trials=trials)
 
@@ -553,6 +721,9 @@ def run_case(case_config: Dict[str, Any]) -> Dict[str, Any]:
                     module, case, i, 1 if mode == "capture" else trials,
                     originals, tf, capture_args=(mode == "capture"),
                 )
+        baseline_complete = bool(baseline) and all(
+            v.get("complete") for v in baseline.values()
+        )
 
         if mode == "capture":
             captured = {}
@@ -594,7 +765,8 @@ def run_case(case_config: Dict[str, Any]) -> Dict[str, Any]:
                 "mode": mode,
                 "trials": trials,
                 "execution_status": "COMPLETED",
-                "observation_complete": True,
+                "observation_complete": baseline_complete,
+                "baseline_complete": baseline_complete,
                 "runtime": _runtime_info(tf, runtime),
                 "baseline": baseline,
                 "tasks": [],
@@ -612,6 +784,8 @@ def run_case(case_config: Dict[str, Any]) -> Dict[str, Any]:
             shared_input_id = shared_case["case_id"]
             if shared_case.get("target_calls"):
                 shared_calls = _build_shared_calls(shared_case, originals, tf)
+                _event("SHARED_ARGS_READY", count=len(shared_calls),
+                       input_id=shared_input_id)
             selected = [shared_case] * n
         else:
             selected = [cases[i % len(cases)] for i in range(n)]
@@ -629,14 +803,20 @@ def run_case(case_config: Dict[str, Any]) -> Dict[str, Any]:
 
         results.sort(key=lambda x: x["task_id"])
         completed = sum(1 for r in results if r.get("status") == "COMPLETED")
+        partial = sum(1 for r in results if r.get("status") == "PARTIAL")
         failed = sum(1 for r in results if r.get("status") in ("EXCEPTION", "BARRIER_ERROR"))
         progress = {
             "submitted": n,
             "started": sum(1 for r in results if r.get("started_at") is not None),
             "completed": completed,
+            "partial": partial,
             "failed": failed,
             "pending": max(0, n - len(results)),
         }
+        observation_complete = (
+            len(results) == n
+            and all(r.get("status") == "COMPLETED" and r.get("complete") for r in results)
+        )
         return {
             "run_id": case_config.get("run_id"),
             "plan_id": case_config.get("plan_id"),
@@ -644,7 +824,8 @@ def run_case(case_config: Dict[str, Any]) -> Dict[str, Any]:
             "mode": mode,
             "trials": trials,
             "execution_status": "COMPLETED",
-            "observation_complete": len(results) == n,
+            "observation_complete": observation_complete,
+            "baseline_complete": baseline_complete if mode == "both" else None,
             "runtime": _runtime_info(tf, runtime),
             "baseline": baseline if mode == "both" else {},
             "shared_input_id": shared_input_id,
@@ -665,7 +846,11 @@ def _runtime_info(tf, runtime: Dict[str, Any]) -> Dict[str, Any]:
         "inter_op_threads": int(runtime.get("inter_op_threads", 1)),
         "external_threads": int(runtime.get("external_threads", 1)),
         "tf_data_parallel_calls": int(runtime.get("tf_data_parallel_calls", 1)),
-        "deterministic": runtime.get("deterministic"),
+        "deterministic_requested": _DETERMINISM_STATE.get("deterministic_requested"),
+        "deterministic_applied": _DETERMINISM_STATE.get("deterministic_applied"),
+        "deterministic_error": _DETERMINISM_STATE.get("deterministic_error"),
+        "deterministic_method": _DETERMINISM_STATE.get("deterministic_method"),
+        "seed": _DETERMINISM_STATE.get("seed"),
         "pid": os.getpid(),
     }
 
@@ -674,7 +859,8 @@ def main() -> int:
     if len(sys.argv) < 2:
         print("usage: concurrent_harness.py <case_config.json>", file=sys.stderr)
         return 2
-    cfg = json.loads(open(sys.argv[1], "r", encoding="utf-8").read())
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        cfg = json.load(f)
     try:
         obs = run_case(cfg)
     except Exception as exc:

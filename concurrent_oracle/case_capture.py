@@ -9,24 +9,96 @@ from typing import Any, Dict, Iterable, List, Optional
 from .constants import DEFAULT_INPUT_CASES
 
 
-def _has_unsupported_arg(value: Any) -> bool:
-    if isinstance(value, dict):
-        if value.get("kind") == "unsupported_input":
-            return True
-        return any(_has_unsupported_arg(v) for v in value.values())
-    if isinstance(value, list):
-        return any(_has_unsupported_arg(v) for v in value)
-    return False
+_SUPPORTED_ARG_KINDS = {
+    "tensor", "ndarray", "sparse_tensor", "ragged_tensor",
+    "dtype", "tensor_shape", "python", "list", "tuple", "dict",
+}
+
+
+def _check_arg_desc(desc: Any) -> Dict[str, Any]:
+    if not isinstance(desc, dict):
+        return {"ok": False, "reason": "argument descriptor is not an object", "conversions": []}
+    kind = desc.get("kind")
+    if kind not in _SUPPORTED_ARG_KINDS:
+        return {"ok": False, "reason": f"unsupported argument kind: {kind}",
+                "conversions": []}
+    if kind in ("tensor", "ndarray"):
+        if desc.get("value") is None or desc.get("value_truncated"):
+            return {"ok": False, "reason": f"{kind} argument data is truncated",
+                    "conversions": []}
+        if not desc.get("dtype") or "shape" not in desc:
+            return {"ok": False, "reason": f"{kind} argument lacks dtype/shape",
+                    "conversions": []}
+        if not desc.get("sha256"):
+            return {"ok": False, "reason": f"{kind} argument lacks content digest",
+                    "conversions": []}
+        conv = ["ndarray_to_tensor"] if kind == "ndarray" else []
+        return {"ok": True, "reason": "", "conversions": conv}
+    if kind == "dtype":
+        return ({"ok": True, "reason": "", "conversions": []}
+                if desc.get("name") else
+                {"ok": False, "reason": "dtype argument lacks name", "conversions": []})
+    if kind == "tensor_shape":
+        return ({"ok": True, "reason": "", "conversions": []}
+                if isinstance(desc.get("dims"), list) else
+                {"ok": False, "reason": "tensor_shape argument lacks dims", "conversions": []})
+    if kind == "sparse_tensor":
+        for key in ("dtype", "dense_shape", "indices", "values"):
+            if key not in desc:
+                return {"ok": False, "reason": f"sparse argument lacks {key}", "conversions": []}
+        return {"ok": True, "reason": "", "conversions": []}
+    if kind == "ragged_tensor":
+        fv = desc.get("flat_values")
+        if not isinstance(fv, dict):
+            return {"ok": False, "reason": "ragged argument lacks flat_values", "conversions": []}
+        sub = _check_arg_desc(fv)
+        if not sub["ok"]:
+            return {"ok": False, "reason": f"ragged flat_values: {sub['reason']}",
+                    "conversions": sub["conversions"]}
+        if not isinstance(desc.get("nested_row_splits"), list):
+            return {"ok": False, "reason": "ragged argument lacks nested_row_splits",
+                    "conversions": []}
+        return {"ok": True, "reason": "", "conversions": sub["conversions"]}
+    if kind in ("list", "tuple", "dict"):
+        items = desc.get("items")
+        vals = items.values() if isinstance(items, dict) else (items or [])
+        conversions = []
+        for item in vals:
+            sub = _check_arg_desc(item)
+            if not sub["ok"]:
+                return {"ok": False, "reason": sub["reason"], "conversions": conversions}
+            conversions.extend(sub["conversions"])
+        return {"ok": True, "reason": "", "conversions": conversions}
+    return {"ok": True, "reason": "", "conversions": []}
+
+
+def check_case_eligibility(case: Dict[str, Any]) -> Dict[str, Any]:
+    calls = case.get("target_calls") or []
+    if not calls:
+        return {"eligible": False, "reason": "no captured target call", "conversions": []}
+    conversions = []
+    for call in calls:
+        if not isinstance(call, dict) or not call.get("call"):
+            return {"eligible": False, "reason": "captured call lacks a name", "conversions": conversions}
+        for arg in call.get("args") or []:
+            sub = _check_arg_desc(arg)
+            if not sub["ok"]:
+                return {"eligible": False, "reason": sub["reason"], "conversions": conversions}
+            conversions.extend(sub["conversions"])
+        for arg in (call.get("kwargs") or {}).values():
+            sub = _check_arg_desc(arg)
+            if not sub["ok"]:
+                return {"eligible": False, "reason": sub["reason"], "conversions": conversions}
+            conversions.extend(sub["conversions"])
+    return {"eligible": True, "reason": "", "conversions": sorted(set(conversions))}
 
 
 def count_unsupported_target_cases(captured: Dict[str, Dict[str, Any]]) -> int:
+    """Count cases that have a captured call but cannot be replayed."""
     count = 0
     for cap in captured.values():
-        calls = cap.get("target_calls") or []
-        for call in calls:
-            if _has_unsupported_arg(call.get("args") or []) or _has_unsupported_arg(call.get("kwargs") or {}):
-                count += 1
-                break
+        if cap.get("target_calls") and not check_case_eligibility(cap)["eligible"]:
+            count += 1
     return count
 
 
@@ -103,6 +175,12 @@ class CaseCapture:
                 case["case_source"] = cap.get("source", "bytes_fallback")
                 if cap.get("error"):
                     case["capture_error"] = cap["error"]
+            eligibility = check_case_eligibility(case)
+            case["eligible"] = eligibility["eligible"]
+            if not eligibility["eligible"]:
+                case["ineligible_reason"] = eligibility["reason"]
+            if eligibility["conversions"]:
+                case["arg_conversions"] = eligibility["conversions"]
         payload["capture_metadata"] = metadata or {}
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")

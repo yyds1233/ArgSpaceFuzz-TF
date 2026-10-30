@@ -50,6 +50,14 @@ def observation_from_harness(
                 "exceptions": exceptions,
                 "trial_records": t.get("trial_records") or [],
                 "trials": t.get("trials"),
+                "complete": t.get("complete"),
+                "trials_expected": t.get("trials_expected"),
+                "trials_completed": t.get("trials_completed"),
+                "trials_failed": t.get("trials_failed"),
+                "trial_status_counts": t.get("trial_status_counts"),
+                "expected_calls": t.get("expected_calls"),
+                "actual_calls": t.get("actual_calls"),
+                "arg_conversions": t.get("arg_conversions") or [],
             },
         ))
     return ExecutionObservation(

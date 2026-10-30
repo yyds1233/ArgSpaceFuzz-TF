@@ -51,16 +51,29 @@ class ContractRegistry:
                 if "contracts" in data and isinstance(data["contracts"], list):
                     for item in data["contracts"]:
                         if isinstance(item, dict):
-                            self.register_contract(item)
-                            count += 1
+                            try:
+                                self.register_contract(item)
+                                count += 1
+                            except Exception as exc:
+                                self.load_errors.append(f"{p}: {exc}")
                 elif "api_name" in data:
-                    self.register_contract(data)
-                    count += 1
+                    try:
+                        self.register_contract(data)
+                        count += 1
+                    except Exception as exc:
+                        self.load_errors.append(f"{p}: {exc}")
                 else:
                     for api, item in data.items():
                         if isinstance(item, dict):
-                            self.register_contract({"api_name": api, **item})
-                            count += 1
+                            try:
+                                self.register_contract({"api_name": api, **item})
+                                count += 1
+                            except Exception as exc:
+                                self.load_errors.append(f"{p}: {exc}")
+            else:
+                self.load_errors.append(
+                    f"{p}: unsupported contract root type {type(data).__name__}"
+                )
         return count
 
     def register_contract(self, contract: Dict[str, Any]) -> None:

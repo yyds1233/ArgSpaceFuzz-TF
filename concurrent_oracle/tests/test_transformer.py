@@ -57,6 +57,33 @@ class TestTransformer(unittest.TestCase):
                              mod._array_sha256(np.array(["a", "b"])))
             self.assertNotEqual(mod._array_sha256(np.array(["a", "b"])),
                                 mod._array_sha256(np.array(["a", "c"])))
+            complete = {"status": "COMPLETED", "complete": True}
+            failed = {"status": "EXCEPTION", "complete": False}
+            s = mod._summarize_trial_status([complete, complete])
+            self.assertEqual((s["status"], s["complete"]), ("COMPLETED", True))
+            s = mod._summarize_trial_status([complete, failed])
+            self.assertEqual((s["status"], s["complete"]), ("PARTIAL", False))
+            s = mod._summarize_trial_status([failed, failed])
+            self.assertEqual((s["status"], s["complete"]), ("EXCEPTION", False))
+
+            # _load_cases must keep only eligible captured cases.
+            import base64
+            cases_path = Path(td) / "filter_cases.json"
+            cases_path.write_text(json.dumps({"cases": [
+                {"case_id": "case_000", "data_b64": base64.b64encode(b"a").decode(),
+                 "eligible": True, "target_calls": [{"call": "tf.math.log1p",
+                                                    "args": [], "kwargs": {}}]},
+                {"case_id": "case_001", "data_b64": base64.b64encode(b"b").decode(),
+                 "eligible": False, "ineligible_reason": "no captured target call"},
+            ]}), encoding="utf-8")
+            loaded = mod._load_cases({"cases_path": str(cases_path)})
+            self.assertEqual([c["case_id"] for c in loaded], ["case_000"])
+            cases_path.write_text(json.dumps({"cases": [
+                {"case_id": "case_001", "data_b64": base64.b64encode(b"b").decode(),
+                 "eligible": False, "ineligible_reason": "no captured target call"},
+            ]}), encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                mod._load_cases({"cases_path": str(cases_path)})
         # original harness must not be modified
         self.assertEqual(HarnessLoader().calculate_hash(REAL), sha_before)
 

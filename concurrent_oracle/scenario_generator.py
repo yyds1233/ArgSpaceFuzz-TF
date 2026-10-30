@@ -48,8 +48,8 @@ class ScenarioGenerator:
         self,
         config: Optional[ModuleConfig] = None,
         contract_registry: Optional[ContractRegistry] = None,
-        max_configs_per_scenario: int = 2,
-        max_plans_per_artifact: int = 4,
+        max_configs_per_scenario: int = 4,
+        max_plans_per_artifact: int = 8,
     ):
         self.config = config or ModuleConfig()
         self.contract_registry = contract_registry or ContractRegistry()
@@ -149,17 +149,20 @@ class ScenarioGenerator:
         }
         det_values = [bool(x) for x in self.config.runtime.deterministic] or [True]
         out: List[Dict[str, Any]] = []
-        for cid in ids:
-            base = dict(RUNTIME_MATRIX.get(cid, RUNTIME_MATRIX["C00"]))
-            # Filter fixed matrix entries against the explicit YAML lists.
-            if any(base[k] not in allowed[k] for k in allowed):
-                continue
-            base.update({
-                "device": "CPU",
-                "deterministic": det_values[0],
-                "config_id": cid,
-            })
-            out.append(base)
+        # Determinism is an explicit test dimension: produce a distinct
+        # configuration identity for each requested value.
+        for det in det_values:
+            for cid in ids:
+                base = dict(RUNTIME_MATRIX.get(cid, RUNTIME_MATRIX["C00"]))
+                # Filter fixed matrix entries against the explicit YAML lists.
+                if any(base[k] not in allowed[k] for k in allowed):
+                    continue
+                base.update({
+                    "device": "CPU",
+                    "deterministic": det,
+                    "config_id": cid if len(det_values) == 1 else f"{cid}_det{int(det)}",
+                })
+                out.append(base)
         return out
 
     def select_oracles(

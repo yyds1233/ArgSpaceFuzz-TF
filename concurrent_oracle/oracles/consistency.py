@@ -26,7 +26,8 @@ class ConsistencyOracle(BaseOracle):
     ) -> OracleEntry:
         if not self.is_applicable(plan, observation):
             return OracleEntry(self.oracle_id, OracleStatus.NOT_APPLICABLE, "O2 not in plan")
-        if plan.contract_status == ContractStatus.UNSUPPORTED:
+        oracle_contract = self.contract_status(plan)
+        if oracle_contract == ContractStatus.UNSUPPORTED:
             return OracleEntry(self.oracle_id, OracleStatus.NOT_APPLICABLE,
                                "contract marks this scenario unsupported")
         if observation.execution_status != ExecutionStatus.COMPLETED:
@@ -59,14 +60,14 @@ class ConsistencyOracle(BaseOracle):
 
         if diffs:
             status = (OracleStatus.VIOLATION
-                      if plan.contract_status == ContractStatus.SUPPORTED
+                      if oracle_contract == ContractStatus.SUPPORTED
                       else OracleStatus.INCONCLUSIVE)
             reason = (f"{len(diffs)} task(s) differ from serial baseline"
                       if status == OracleStatus.VIOLATION
                       else "serial/parallel difference observed, but API contract is unknown")
             return OracleEntry(self.oracle_id, status, reason,
                                evidence={"diffs": diffs[:20], "checked": checked,
-                                         "contract_status": plan.contract_status.value})
+                                         "contract_status": oracle_contract.value})
         if checked == 0:
             return OracleEntry(self.oracle_id, OracleStatus.INCONCLUSIVE,
                                "no task produced a comparable output")

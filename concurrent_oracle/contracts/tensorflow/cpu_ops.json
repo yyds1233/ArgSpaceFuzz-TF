@@ -1,0 +1,56 @@
+[
+  {
+    "api_name": "tf.math.log1p",
+    "scenario": "independent_api_calls",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["pure_stateless", "serial_parallel_semantics"],
+    "notes": ["Elementwise unary op; independent inputs must not interfere."],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.math.log1p",
+    "scenario": "shared_readonly_input",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["read_only_input"],
+    "notes": ["The input tensor is read-only for this op."],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.nn.relu",
+    "scenario": "independent_api_calls",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["pure_stateless", "serial_parallel_semantics"],
+    "notes": [],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.math.reduce_sum",
+    "scenario": "independent_api_calls",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["serial_parallel_semantics"],
+    "notes": [],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.linalg.matmul",
+    "scenario": "independent_api_calls",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["serial_parallel_semantics"],
+    "notes": [],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.argsort",
+    "scenario": "independent_api_calls",
+    "status": "SUPPORTED",
+    "source": "TensorFlow API documentation",
+    "properties": ["deterministic_order", "serial_parallel_semantics"],
+    "notes": [],
+    "last_verified_version": null
+  }
+]

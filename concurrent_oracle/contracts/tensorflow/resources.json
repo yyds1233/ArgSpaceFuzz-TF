@@ -1,0 +1,29 @@
+[
+  {
+    "api_name": "tf.Variable",
+    "scenario": "shared_resource_access",
+    "status": "UNKNOWN",
+    "source": "TensorFlow API documentation",
+    "properties": ["mutable_state"],
+    "notes": ["Concurrent mutation semantics depend on the specific op; do not default to VIOLATION."],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.data.Iterator",
+    "scenario": "tfdata_early_stop",
+    "status": "UNKNOWN",
+    "source": "TensorFlow API documentation",
+    "properties": ["resource_lifecycle"],
+    "notes": [],
+    "last_verified_version": null
+  },
+  {
+    "api_name": "tf.compat.v1.Session",
+    "scenario": "python_callback_lifecycle",
+    "status": "UNKNOWN",
+    "source": "TensorFlow API documentation",
+    "properties": ["resource_lifecycle", "gil_interaction"],
+    "notes": [],
+    "last_verified_version": null
+  }
+]

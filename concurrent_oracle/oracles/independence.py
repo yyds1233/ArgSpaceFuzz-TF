@@ -33,7 +33,8 @@ class IndependenceOracle(BaseOracle):
     ) -> OracleEntry:
         if not self.is_applicable(plan, observation):
             return OracleEntry(self.oracle_id, OracleStatus.NOT_APPLICABLE, "O3 not in plan")
-        if plan.contract_status == ContractStatus.UNSUPPORTED:
+        oracle_contract = self.contract_status(plan)
+        if oracle_contract == ContractStatus.UNSUPPORTED:
             return OracleEntry(self.oracle_id, OracleStatus.NOT_APPLICABLE,
                                "contract marks this scenario unsupported")
         if observation.execution_status != ExecutionStatus.COMPLETED:
@@ -97,15 +98,19 @@ class IndependenceOracle(BaseOracle):
                 })
 
         if structural:
+            # Missing/duplicate/misnumbered tasks are observation-integrity
+            # problems first; keep them separate from framework semantic
+            # violations and do not emit VIOLATION without an oracle contract.
             return OracleEntry(
-                self.oracle_id, OracleStatus.VIOLATION,
-                f"{len(structural)} structural independence problem(s)",
-                evidence={"problems": structural[:20], "checked": checked},
+                self.oracle_id, OracleStatus.INCONCLUSIVE,
+                f"{len(structural)} observation/execution integrity problem(s); "
+                "not treated as a framework semantic violation",
+                evidence={"observation_integrity": structural[:20], "checked": checked},
             )
 
         if suspected:
             status = (OracleStatus.VIOLATION
-                      if plan.contract_status == ContractStatus.SUPPORTED
+                      if oracle_contract == ContractStatus.SUPPORTED
                       else OracleStatus.INCONCLUSIVE)
             reason = ("task output matches another selected task's baseline "
                       "(suspected cross-task association)")
@@ -114,16 +119,16 @@ class IndependenceOracle(BaseOracle):
             return OracleEntry(self.oracle_id, status, reason,
                                evidence={"suspected_cross_talk": suspected[:20],
                                          "checked": checked,
-                                         "contract_status": plan.contract_status.value})
+                                         "contract_status": oracle_contract.value})
 
         if mismatches:
             status = (OracleStatus.VIOLATION
-                      if plan.contract_status == ContractStatus.SUPPORTED
+                      if oracle_contract == ContractStatus.SUPPORTED
                       else OracleStatus.INCONCLUSIVE)
             return OracleEntry(self.oracle_id, status,
                                f"{len(mismatches)} output/association mismatch(es)",
                                evidence={"problems": mismatches[:20], "checked": checked,
-                                         "contract_status": plan.contract_status.value})
+                                         "contract_status": oracle_contract.value})
 
         if checked != expected:
             return OracleEntry(
