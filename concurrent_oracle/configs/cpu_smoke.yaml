@@ -1,0 +1,36 @@
+framework: tensorflow
+
+environment:
+  device: CPU
+  cuda_visible_devices: "-1"
+  require_cpu_only: true
+  multiprocessing_start_method: spawn
+
+runtime:
+  external_threads: [1, 2]
+  intra_op_threads: [1]
+  inter_op_threads: [1]
+  tf_data_parallel_calls: [1, 2]
+  deterministic: [true]
+
+generation:
+  max_repair_attempts: 1
+  use_template_first: true
+  use_llm_transform: true
+
+execution:
+  trials: 3
+  timeout_seconds: 30
+  no_progress_timeout_seconds: 10
+  max_parallel_processes: 1
+
+oracle:
+  enabled:
+    - O2
+    - O3
+    - O6
+    - O8
+
+sanitizer:
+  enabled: false
+  type: none

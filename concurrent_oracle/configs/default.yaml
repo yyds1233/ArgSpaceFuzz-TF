@@ -1,0 +1,53 @@
+framework: tensorflow
+
+paths:
+  output_dir: concurrent_oracle/outputs
+  contract_dir: concurrent_oracle/contracts/tensorflow
+  template_dir: concurrent_oracle/templates
+
+environment:
+  device: CPU
+  cuda_visible_devices: "-1"
+  require_cpu_only: true
+  multiprocessing_start_method: spawn
+
+runtime:
+  external_threads: [1, 2, 4]
+  intra_op_threads: [1, 2, 4]
+  inter_op_threads: [1, 2]
+  tf_data_parallel_calls: [1, 2, 4]
+  deterministic: [true, false]
+
+generation:
+  max_repair_attempts: 2
+  use_template_first: true
+  use_llm_transform: true
+
+execution:
+  trials: 10
+  timeout_seconds: 60
+  no_progress_timeout_seconds: 20
+  max_parallel_processes: 1
+
+oracle:
+  enabled:
+    - O1
+    - O2
+    - O3
+    - O4
+    - O5
+    - O6
+    - O7
+    - O8
+    - O9
+
+comparison:
+  float_atol: 1.0e-6
+  float_rtol: 1.0e-5
+  exact_integer: true
+  compare_nan_mask: true
+  compare_inf_sign: true
+
+sanitizer:
+  enabled: false
+  type: none
