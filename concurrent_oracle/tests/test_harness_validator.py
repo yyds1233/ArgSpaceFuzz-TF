@@ -13,8 +13,8 @@ from concurrent_oracle.scenario_generator import ScenarioGenerator
 from concurrent_oracle.suitability_rules import SuitabilityRules
 from concurrent_oracle.transformer import HarnessTransformer
 
-REAL = Path("/root/fuzz_output_experiment/llm.tf.math.log1p.py")
-CONTRACTS = Path("/root/concurrent_oracle/contracts/tensorflow")
+REAL = Path(__file__).resolve().parent / "fixtures" / "llm.tf.math.log1p.py"
+CONTRACTS = Path(__file__).resolve().parents[1] / "contracts" / "tensorflow"
 
 
 def build(tmp: str):

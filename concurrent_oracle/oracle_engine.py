@@ -83,8 +83,14 @@ class OracleEngine:
             failure_artifacts=sorted(set(failure_artifacts)),
             metadata={
                 "config_id": observation.config_id,
+                "run_id": observation.run_id,
+                "mode": observation.mode,
+                "trials": observation.trials,
+                "baseline_run_id": observation.baseline_run_id,
+                "test_run_id": observation.test_run_id,
                 "contract_status": plan.contract_status.value,
                 "task_progress": observation.task_progress,
                 "observation_complete": observation.observation_complete,
+                "baseline_runtime": observation.baseline_runtime,
             },
         )

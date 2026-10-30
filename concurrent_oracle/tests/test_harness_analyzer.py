@@ -5,7 +5,7 @@ from pathlib import Path
 from concurrent_oracle.harness_analyzer import HarnessAnalyzer
 from concurrent_oracle.harness_loader import HarnessLoader
 
-REAL = Path("/root/fuzz_output_experiment/llm.tf.math.log1p.py")
+REAL = Path(__file__).resolve().parent / "fixtures" / "llm.tf.math.log1p.py"
 
 
 class TestHarnessAnalyzer(unittest.TestCase):
@@ -34,6 +34,24 @@ class TestHarnessAnalyzer(unittest.TestCase):
             a = self.analyzer.analyze(artifact)
             self.assertEqual(a.ast_parse_status, "FAILED")
             self.assertTrue(any("SyntaxError" in w for w in a.warnings))
+
+    def test_import_alias_resolution(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "llm.tf.math.log1p.py"
+            p.write_text(
+                "import tensorflow as tf\n"
+                "from tensorflow.math import log1p as op\n"
+                "from tensorflow import math as m\n"
+                "def TestOneInput(data):\n"
+                "    x = tf.constant([1.0])\n"
+                "    y = op(x)\n"
+                "    z = m.log1p(x)\n",
+                encoding="utf-8",
+            )
+            artifact = self.loader.load(p)
+            a = self.analyzer.analyze(artifact)
+            self.assertTrue(a.target_calls)
+            self.assertTrue(all(c.api_name == "tf.math.log1p" for c in a.target_calls))
 
     def test_no_target_call_warning(self):
         with tempfile.TemporaryDirectory() as td:

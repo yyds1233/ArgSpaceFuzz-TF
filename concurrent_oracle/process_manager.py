@@ -56,27 +56,38 @@ class ProcessManager:
     ) -> ProcessResult:
         env = self.build_env(env_extra)
         t0 = time.time()
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
         try:
-            p = subprocess.run(
-                cmd,
-                cwd=str(cwd),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout,
-            )
+            stdout, stderr = proc.communicate(timeout=timeout)
             return ProcessResult(
-                rc=p.returncode,
-                signal=signal_name(p.returncode),
+                rc=proc.returncode,
+                signal=signal_name(proc.returncode),
                 timed_out=False,
-                stdout=p.stdout or "",
-                stderr=p.stderr or "",
+                stdout=stdout or "",
+                stderr=stderr or "",
                 duration=time.time() - t0,
             )
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        except subprocess.TimeoutExpired:
+            # Kill the whole process group, not just the direct child.
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except Exception:
+                stdout, stderr = "", ""
             return ProcessResult(
                 rc=None,
                 signal="SIGKILL",

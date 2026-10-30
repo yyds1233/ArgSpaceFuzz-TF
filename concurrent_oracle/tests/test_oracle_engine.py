@@ -67,7 +67,28 @@ class TestOracleEngine(unittest.TestCase):
         r = self.engine.evaluate(obs([task(0, "case_000", [1.0]), task(1, "case_001", [1.0])]), plan())
         by = {e.oracle_id: e for e in r.oracle_results}
         self.assertEqual(by["O3"].status, OracleStatus.VIOLATION)
-        self.assertIn("cross_talk", by["O3"].evidence)
+        self.assertIn("suspected_cross_talk", by["O3"].evidence)
+
+    def test_non_injective_output_is_not_cross_talk(self):
+        baseline = {
+            "case_000": {"outputs": [{"call": "tf.x", "output": desc([0.0])}]},
+            "case_001": {"outputs": [{"call": "tf.x", "output": desc([0.0])}]},
+        }
+        r = self.engine.evaluate(
+            obs([task(0, "case_000", [0.0]), task(1, "case_001", [0.0])], baseline=baseline),
+            plan(),
+        )
+        by = {e.oracle_id: e for e in r.oracle_results}
+        self.assertEqual(by["O3"].status, OracleStatus.PASS)
+
+    def test_unknown_contract_suspected_cross_talk_inconclusive(self):
+        r = self.engine.evaluate(
+            obs([task(0, "case_000", [1.0]), task(1, "case_001", [1.0])]),
+            plan(contract=ContractStatus.UNKNOWN),
+        )
+        by = {e.oracle_id: e for e in r.oracle_results}
+        self.assertEqual(by["O3"].status, OracleStatus.INCONCLUSIVE)
+        self.assertIn("suspected_cross_talk", by["O3"].evidence)
 
     def test_incomplete_inconclusive(self):
         r = self.engine.evaluate(obs([task(0, "case_000", [1.0])], complete=False), plan())

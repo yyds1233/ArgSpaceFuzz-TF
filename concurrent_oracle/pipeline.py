@@ -19,6 +19,7 @@ from .scenario_generator import ScenarioGenerator
 from .schemas import (
     ConcurrentHarnessArtifact,
     ConcurrentTestPlan,
+    ContractStatus,
     Decision,
     ExecutionObservation,
     HarnessAnalysis,
@@ -106,6 +107,7 @@ class ConcurrentOraclePipeline:
         analysis = self.analyzer.analyze(artifact)
         report = self.suitability.analyze(artifact, analysis)
         plans = self.scenario_generator.generate(report, api_name=artifact.api_name)
+        self.last_skipped = dict(self.scenario_generator.last_skipped)
 
         write_json(self.artifact_path(artifact.artifact_id), artifact)
         write_json(self.analysis_path(artifact.artifact_id), analysis)
@@ -167,6 +169,7 @@ class ConcurrentOraclePipeline:
         psr_path: Optional[str | Path] = None,
         max_plans: int = 1,
         run_baseline: bool = True,
+        allow_unknown_contract: bool = False,
     ) -> Dict[str, Any]:
         artifact, analysis, report, plans = self.analyze(harness_path, psr_path=psr_path)
         summary: Dict[str, Any] = {
@@ -175,6 +178,8 @@ class ConcurrentOraclePipeline:
             "contract_status": report.contract_status.value,
             "scenarios": [s.scenario_id for s in report.candidate_scenarios],
             "plans": [to_jsonable(p) for p in plans],
+            "skipped_scenarios": getattr(self, "last_skipped", {}),
+            "contract_load_errors": list(self.contract_registry.load_errors),
             "results": [],
             "errors": [],
             "output_dir": str(self.output_dir),
@@ -187,27 +192,59 @@ class ConcurrentOraclePipeline:
             return summary
 
         for plan in plans[:max_plans]:
+            if plan.contract_status == ContractStatus.UNSUPPORTED:
+                summary.setdefault("skipped_plans", []).append(
+                    {"plan_id": plan.plan_id, "reason": "contract UNSUPPORTED"})
+                continue
+            if plan.contract_status == ContractStatus.UNKNOWN and not allow_unknown_contract:
+                summary.setdefault("skipped_plans", []).append(
+                    {"plan_id": plan.plan_id, "reason": "contract UNKNOWN (strict mode)"})
+                continue
             print(f"[pipeline] plan {plan.plan_id} scenario={plan.scenario} "
-                  f"config={plan.runtime.get('config_id')}", flush=True)
+                  f"config={plan.runtime.get('config_id')} "
+                  f"contract={plan.contract_status.value}", flush=True)
             try:
                 art = self.generate(artifact, analysis, plan)
                 if not art.concurrent_harness:
                     summary["errors"].append({"plan_id": plan.plan_id,
                                               "stage": "generate", "reason": "no harness generated"})
                     continue
-                val = self.validate(art, plan, run_baseline=run_baseline)
+                capture = self.runner.capture_cases(art, plan)
+                summary.setdefault("captures", []).append({"plan_id": plan.plan_id, **capture})
+                if capture.get("status") == "FALLBACK" and not capture.get("cases_with_target_calls"):
+                    summary["errors"].append({"plan_id": plan.plan_id, "stage": "capture",
+                                              "reason": "no target call could be captured; "
+                                                        "bytes fallback is disabled in strict P0"})
+                    continue
+                if capture.get("unsupported_target_cases"):
+                    summary["errors"].append({"plan_id": plan.plan_id, "stage": "capture",
+                                              "reason": f"{capture['unsupported_target_cases']} "
+                                                        f"case(s) use unsupported target arguments"})
+                    continue
+                # Static validation only here; runner.run performs the isolated
+                # baseline and concurrent processes.
+                val = self.validate(art, plan, run_baseline=False)
                 if not val.get("ok"):
                     summary["errors"].append({"plan_id": plan.plan_id, "stage": "validate",
-                                              "reason": val.get("serial_baseline", {}).get("reason")
-                                              or "validation failed"})
+                                              "reason": "static validation failed"})
                     continue
                 obs = self.run(art, plan)
+                if obs.execution_status.value not in ("COMPLETED", "PARTIAL"):
+                    summary["errors"].append({
+                        "plan_id": plan.plan_id, "stage": "run",
+                        "reason": obs.execution_status.value, "run_id": obs.run_id,
+                        "baseline_run_id": obs.baseline_run_id,
+                    })
                 result = self.evaluate(obs, plan)
                 report_path = self.report(artifact, plan, obs, result)
                 summary["results"].append({
                     "plan_id": plan.plan_id,
                     "scenario": plan.scenario,
                     "config_id": plan.runtime.get("config_id"),
+                    "run_id": obs.run_id,
+                    "baseline_run_id": obs.baseline_run_id,
+                    "test_run_id": obs.test_run_id,
+                    "trials": obs.trials,
                     "execution_status": obs.execution_status.value,
                     "oracle_results": [
                         {"oracle_id": e.oracle_id, "status": e.status.value, "reason": e.reason}

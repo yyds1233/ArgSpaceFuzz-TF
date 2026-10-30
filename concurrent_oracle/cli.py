@@ -118,8 +118,10 @@ def cmd_pipeline(args) -> int:
     for hp in paths:
         print(f"[pipeline] harness {hp}", flush=True)
         summary = pipeline.run_harness(
-            hp, psr_path=args.psr, max_plans=args.max_plans,
+            hp, psr_path=args.psr,
+            max_plans=args.max_plans if args.max_plans > 0 else 10**9,
             run_baseline=not args.no_serial_baseline,
+            allow_unknown_contract=args.allow_unknown_contract,
         )
         summaries.append(summary)
         print(json.dumps(summary, indent=2, ensure_ascii=False))
@@ -178,8 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--harness", default=None)
     p.add_argument("--harness-dir", default=None)
     p.add_argument("--psr", default=None)
-    p.add_argument("--max-plans", type=int, default=1)
+    p.add_argument("--max-plans", type=int, default=0,
+                   help="0 means all plans; otherwise the first N plans")
     p.add_argument("--no-serial-baseline", action="store_true")
+    p.add_argument("--allow-unknown-contract", action="store_true")
     p.set_defaults(func=cmd_pipeline)
 
     p = sub.add_parser("report")

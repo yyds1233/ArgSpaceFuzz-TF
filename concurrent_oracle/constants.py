@@ -92,6 +92,55 @@ RUNTIME_MATRIX = {
 # Scenarios that are meaningful with the first-version CPU implementation.
 P0_SCENARIOS = ("independent_api_calls", "shared_readonly_input", "parallel_kernel_execution")
 
+# Capability manifest: a scenario is generated only when its execution backend
+# and at least one observation path are implemented.  Unimplemented scenarios
+# remain in the suitability report but are skipped explicitly.
+SCENARIO_CAPABILITIES = {
+    "independent_api_calls": {
+        "implemented": True,
+        "backend": "captured_target_replay_independent",
+        "oracles": ["O2", "O3"],
+    },
+    "shared_readonly_input": {
+        "implemented": True,
+        "backend": "shared_target_args",
+        "oracles": ["O3"],
+    },
+    "parallel_kernel_execution": {
+        "implemented": True,
+        "backend": "captured_target_replay_internal_threads",
+        "oracles": ["O2", "O3"],
+    },
+    "shared_resource_access": {
+        "implemented": False,
+        "reason": "shared mutable TensorFlow resource backend is P1",
+    },
+    "tfdata_parallel_map": {
+        "implemented": False,
+        "reason": "tf.data consumption backend is P2",
+    },
+    "tfdata_interleave": {
+        "implemented": False,
+        "reason": "tf.data consumption backend is P2",
+    },
+    "tfdata_early_stop": {
+        "implemented": False,
+        "reason": "tf.data lifecycle backend is P2",
+    },
+    "python_callback_lifecycle": {
+        "implemented": False,
+        "reason": "callback lifecycle backend is P2",
+    },
+    "exception_recovery": {
+        "implemented": False,
+        "reason": "exception isolation/recovery backend is P2",
+    },
+    "invalid_input_cpu": {
+        "implemented": False,
+        "reason": "invalid-input backend is P2",
+    },
+}
+
 DEFAULT_INPUT_CASES = (
     b"\x00" * 64,
     b"\x01" * 64,

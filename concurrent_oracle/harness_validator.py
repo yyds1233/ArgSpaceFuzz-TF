@@ -6,6 +6,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -104,26 +106,36 @@ class HarnessValidator:
         harness = Path(harness_path).resolve()
         out_dir = Path(output_dir).resolve()
         cases_path = out_dir / "captured_cases" / plan.plan_id / "cases.json"
-        serial_dir = out_dir / "executions" / plan.plan_id / "serial_baseline"
+        run_id = f"serial_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        serial_dir = out_dir / "executions" / plan.plan_id / "serial_baseline" / run_id
         serial_dir.mkdir(parents=True, exist_ok=True)
         obs_path = serial_dir / "observation.json"
         cfg_path = serial_dir / "case_config.json"
+        events_path = serial_dir / "events.jsonl"
         runtime = dict(plan.runtime)
         runtime.update({
             "external_threads": 1,
-            "intra_op_threads": 1,
-            "inter_op_threads": 1,
             "device": "CPU",
             "require_cpu_only": True,
         })
+        if plan.scenario == "parallel_kernel_execution":
+            runtime["intra_op_threads"] = 1
+            runtime["inter_op_threads"] = 1
         cfg = {
+            "run_id": run_id,
             "plan_id": plan.plan_id,
             "config_id": "serial_baseline",
+            "mode": "baseline",
+            "state_model": plan.state_model,
+            "trials": 1,
             "runtime": runtime,
             "cases_path": str(cases_path),
             "output_path": str(obs_path),
+            "events_path": str(events_path),
         }
-        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(cfg_path)
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = "-1"
         env.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
@@ -139,11 +151,14 @@ class HarnessValidator:
                 text=True,
                 timeout=timeout or (plan.timeout_seconds + 30),
                 env=env,
+                start_new_session=True,
             )
         except subprocess.TimeoutExpired as exc:
             return {"ok": False, "rc": None, "reason": "serial baseline timeout",
+                    "run_id": run_id,
                     "stdout": (exc.stdout or "")[-2000:] if isinstance(exc.stdout, str) else "",
-                    "stderr": (exc.stderr or "")[-2000:] if isinstance(exc.stderr, str) else ""}
+                    "stderr": (exc.stderr or "")[-2000:] if isinstance(exc.stderr, str) else "",
+                    "events": str(events_path)}
         obs = None
         if obs_path.exists():
             try:
@@ -152,7 +167,13 @@ class HarnessValidator:
                 obs = None
         if obs is None:
             return {"ok": False, "rc": r.returncode, "reason": "observation file missing",
-                    "stdout": (r.stdout or "")[-2000:], "stderr": (r.stderr or "")[-2000:]}
+                    "run_id": run_id,
+                    "stdout": (r.stdout or "")[-2000:], "stderr": (r.stderr or "")[-2000:],
+                    "events": str(events_path)}
+        if obs.get("run_id") != run_id:
+            return {"ok": False, "rc": r.returncode, "reason": "observation run_id mismatch",
+                    "run_id": run_id, "observation_path": str(obs_path),
+                    "events": str(events_path)}
         baseline = obs.get("baseline") or {}
         completed = [k for k, v in baseline.items()
                      if isinstance(v, dict) and v.get("status") == "COMPLETED" and v.get("outputs")]
@@ -160,9 +181,11 @@ class HarnessValidator:
         return {
             "ok": ok,
             "rc": r.returncode,
+            "run_id": run_id,
             "reason": "ok" if ok else f"execution_status={obs.get('execution_status')} completed_cases={len(completed)}",
             "completed_cases": completed,
             "observation_path": str(obs_path),
+            "events": str(events_path),
             "observation": obs,
             "stdout": (r.stdout or "")[-2000:],
             "stderr": (r.stderr or "")[-2000:],

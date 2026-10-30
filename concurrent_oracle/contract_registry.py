@@ -23,24 +23,30 @@ DEFAULT_CONTRACT = {
 class ContractRegistry:
     def __init__(self, contract_dir: Optional[str | Path] = None):
         self._contracts: List[Dict[str, Any]] = []
+        self.load_errors: List[str] = []
         if contract_dir:
             self.load_directory(contract_dir)
 
     def load_directory(self, contract_dir: str | Path) -> int:
         d = Path(contract_dir)
         if not d.exists():
+            self.load_errors.append(f"contract directory not found: {d}")
             return 0
         count = 0
         for p in sorted(d.glob("*.json")):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as exc:
+                self.load_errors.append(f"{p}: {type(exc).__name__}: {exc}")
                 continue
             if isinstance(data, list):
                 for item in data:
                     if isinstance(item, dict):
-                        self.register_contract(item)
-                        count += 1
+                        try:
+                            self.register_contract(item)
+                            count += 1
+                        except Exception as exc:
+                            self.load_errors.append(f"{p}: {exc}")
             elif isinstance(data, dict):
                 if "contracts" in data and isinstance(data["contracts"], list):
                     for item in data["contracts"]:
@@ -85,22 +91,42 @@ class ContractRegistry:
             return dict(candidates[-1])
         return {**DEFAULT_CONTRACT, "api_name": api_name, "scenario": scenario}
 
+    def get_oracle_status(self, api_name: str, scenario: str, oracle_id: str) -> str:
+        """Per-oracle status; falls back to the scenario-level status."""
+        contract = self.get_contract(api_name, scenario)
+        per_oracle = contract.get("oracle_status") or {}
+        if isinstance(per_oracle, dict) and oracle_id in per_oracle:
+            status = str(per_oracle[oracle_id]).upper()
+            if status in CONTRACT_STATUSES:
+                return status
+        allowed = contract.get("oracles") or []
+        if allowed and oracle_id not in allowed:
+            return "UNSUPPORTED"
+        return str(contract.get("status", "UNKNOWN")).upper()
+
+    def plan_status(self, api_name: str, scenario: str, oracles: Iterable[str]) -> str:
+        """Minimum support across the oracles actually bound to a plan.
+
+        UNSUPPORTED dominates, then UNKNOWN, then SUPPORTED.  This prevents a
+        supported scenario from silently promoting an unknown plan.
+        """
+        statuses = [self.get_oracle_status(api_name, scenario, o) for o in oracles]
+        if not statuses:
+            return "UNKNOWN"
+        if any(s == "UNSUPPORTED" for s in statuses):
+            return "UNSUPPORTED"
+        if all(s == "SUPPORTED" for s in statuses):
+            return "SUPPORTED"
+        return "UNKNOWN"
+
     def validate_oracle_applicability(self, api_name: str, scenario: str, oracle_id: str) -> Dict[str, Any]:
         contract = self.get_contract(api_name, scenario)
-        status = contract.get("status", "UNKNOWN")
-        allowed = contract.get("oracles") or []
+        status = self.get_oracle_status(api_name, scenario, oracle_id)
         if status == "UNSUPPORTED":
             return {
                 "applicable": False,
                 "contract_status": status,
-                "reason": f"contract marks {api_name}/{scenario} as UNSUPPORTED",
-                "contract": contract,
-            }
-        if allowed and oracle_id not in allowed:
-            return {
-                "applicable": False,
-                "contract_status": status,
-                "reason": f"oracle {oracle_id} is not listed in the contract's allowed oracles",
+                "reason": f"contract marks {api_name}/{scenario}/{oracle_id} as UNSUPPORTED",
                 "contract": contract,
             }
         return {

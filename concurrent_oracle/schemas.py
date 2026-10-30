@@ -90,7 +90,9 @@ def to_jsonable(value: Any) -> Any:
 def write_json(path: Path | str, value: Any) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(to_jsonable(value), indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(to_jsonable(value), indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
     return path
 
 
@@ -224,6 +226,7 @@ class ConcurrentTestPlan:
     state_model: str = "INDEPENDENT_INPUTS"
     oracles: List[str] = field(default_factory=list)
     contract_status: ContractStatus = ContractStatus.UNKNOWN
+    oracle_contracts: Dict[str, str] = field(default_factory=dict)
     trials: int = 1
     timeout_seconds: int = 60
     case_source: str = ""
@@ -281,6 +284,12 @@ class TaskObservation:
 class ExecutionObservation:
     plan_id: str
     config_id: str
+    run_id: Optional[str] = None
+    mode: Optional[str] = None
+    trials: Optional[int] = None
+    baseline_run_id: Optional[str] = None
+    test_run_id: Optional[str] = None
+    baseline_runtime: Dict[str, Any] = field(default_factory=dict)
     execution_status: ExecutionStatus = ExecutionStatus.COMPLETED
     process_exit_code: Optional[int] = None
     process_signal: Optional[str] = None

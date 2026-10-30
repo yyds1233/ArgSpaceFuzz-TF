@@ -1,13 +1,12 @@
 """Generate ConcurrentTestPlan objects from a SuitabilityReport."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import ModuleConfig
-from .constants import RUNTIME_MATRIX, SCENARIO_ORACLES
+from .constants import RUNTIME_MATRIX, SCENARIO_ORACLES, SCENARIO_CAPABILITIES
 from .contract_registry import ContractRegistry
 from .schemas import (
-    CandidateScenario,
     ConcurrentTestPlan,
     ContractStatus,
     SuitabilityReport,
@@ -56,56 +55,108 @@ class ScenarioGenerator:
         self.contract_registry = contract_registry or ContractRegistry()
         self.max_configs_per_scenario = max_configs_per_scenario
         self.max_plans_per_artifact = max_plans_per_artifact
+        self.last_skipped: Dict[str, str] = {}
 
     def generate(self, suitability: SuitabilityReport, api_name: str = "") -> List[ConcurrentTestPlan]:
-        plans: List[ConcurrentTestPlan] = []
         enabled = set(self.config.oracle_enabled)
         trials = int(self.config.execution.trials)
         timeout = int(self.config.execution.timeout_seconds)
+        self.last_skipped = {}
 
+        # Build scenario candidates first, then allocate one configuration per
+        # scenario before spending the remaining plan budget on extra configs.
+        candidates: List[Tuple[Any, List[Dict[str, Any]], List[str], Dict[str, str], ContractStatus]] = []
         for scenario in suitability.candidate_scenarios:
             scenario_id = validate_scenario(scenario.scenario_id)
             if scenario_id not in _SCENARIO_CONFIGS:
                 continue
+            cap = SCENARIO_CAPABILITIES.get(scenario_id) or {}
+            if not cap.get("implemented", False):
+                self.last_skipped[scenario_id] = cap.get("reason", "no execution backend")
+                continue
             oracles = self.select_oracles(scenario_id, scenario.oracles, enabled, api_name)
             if not oracles:
                 continue
+            cap_oracles = set(cap.get("oracles") or [])
+            implemented_oracles = [o for o in oracles if not cap_oracles or o in cap_oracles]
+            unimplemented_oracles = [o for o in oracles if cap_oracles and o not in cap_oracles]
+            if not implemented_oracles:
+                self.last_skipped[scenario_id] = "no implemented oracle for this scenario"
+                continue
+            oracles = implemented_oracles
+            oracle_contracts = {
+                oid: self.contract_registry.get_oracle_status(api_name, scenario_id, oid)
+                for oid in oracles
+            } if api_name else {oid: "UNKNOWN" for oid in oracles}
+            plan_status = (self.contract_registry.plan_status(api_name, scenario_id, oracles)
+                           if api_name else "UNKNOWN")
+            if plan_status == "UNSUPPORTED":
+                continue
             runtime_configs = self.generate_runtime_configs(scenario_id)
-            for runtime in runtime_configs[: self.max_configs_per_scenario]:
-                idx = len(plans)
-                plan_id = make_plan_id(suitability.artifact_id, scenario_id, idx)
-                plans.append(ConcurrentTestPlan(
-                    plan_id=plan_id,
-                    artifact_id=suitability.artifact_id,
-                    scenario=scenario_id,
-                    runtime=runtime,
-                    state_model=scenario.state_model,
-                    oracles=oracles,
-                    contract_status=suitability.contract_status,
-                    trials=trials,
-                    timeout_seconds=timeout,
-                    case_source=f"captured_cases/{plan_id}",
-                    expected_relation=_EXPECTED_RELATION.get(scenario_id, "GENERIC_OBSERVATION"),
-                    metadata={
-                        "api_name": api_name,
-                        "priority": scenario.priority,
-                        "reason": scenario.reason,
-                        "config_id": runtime.get("config_id"),
-                        "api_categories": list(suitability.api_categories),
-                    },
-                ))
-                if len(plans) >= self.max_plans_per_artifact:
-                    return plans
+            if not runtime_configs:
+                continue
+            candidates.append((scenario, runtime_configs, oracles, oracle_contracts,
+                               ContractStatus(plan_status)))
+
+        ordered: List[Tuple[Any, Dict[str, Any], List[str], Dict[str, str], ContractStatus]] = []
+        # First pass: one plan per applicable scenario, so an early scenario
+        # cannot exhaust the budget and hide internal-parallel coverage.
+        for scenario, configs, oracles, oracle_contracts, plan_status in candidates:
+            ordered.append((scenario, configs[0], oracles, oracle_contracts, plan_status))
+        # Second pass: additional configurations.
+        for scenario, configs, oracles, oracle_contracts, plan_status in candidates:
+            for runtime in configs[1: self.max_configs_per_scenario]:
+                ordered.append((scenario, runtime, oracles, oracle_contracts, plan_status))
+
+        plans: List[ConcurrentTestPlan] = []
+        for scenario, runtime, oracles, oracle_contracts, plan_status in ordered:
+            if len(plans) >= self.max_plans_per_artifact:
+                break
+            idx = len(plans)
+            scenario_id = scenario.scenario_id
+            plan_id = make_plan_id(suitability.artifact_id, scenario_id, idx)
+            plans.append(ConcurrentTestPlan(
+                plan_id=plan_id,
+                artifact_id=suitability.artifact_id,
+                scenario=scenario_id,
+                runtime=runtime,
+                state_model=scenario.state_model,
+                oracles=oracles,
+                contract_status=plan_status,
+                oracle_contracts=oracle_contracts,
+                trials=trials,
+                timeout_seconds=timeout,
+                case_source=f"captured_cases/{plan_id}",
+                expected_relation=_EXPECTED_RELATION.get(scenario_id, "GENERIC_OBSERVATION"),
+                metadata={
+                    "api_name": api_name,
+                    "priority": scenario.priority,
+                    "reason": scenario.reason,
+                    "config_id": runtime.get("config_id"),
+                    "api_categories": list(suitability.api_categories),
+                    "unimplemented_oracles": unimplemented_oracles,
+                },
+            ))
         return plans
 
     def generate_runtime_configs(self, scenario: str, api_categories: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         ids = _SCENARIO_CONFIGS.get(scenario, ["C00"])
+        allowed = {
+            "external_threads": set(int(x) for x in self.config.runtime.external_threads),
+            "intra_op_threads": set(int(x) for x in self.config.runtime.intra_op_threads),
+            "inter_op_threads": set(int(x) for x in self.config.runtime.inter_op_threads),
+            "tf_data_parallel_calls": set(int(x) for x in self.config.runtime.tf_data_parallel_calls),
+        }
+        det_values = [bool(x) for x in self.config.runtime.deterministic] or [True]
         out: List[Dict[str, Any]] = []
         for cid in ids:
             base = dict(RUNTIME_MATRIX.get(cid, RUNTIME_MATRIX["C00"]))
+            # Filter fixed matrix entries against the explicit YAML lists.
+            if any(base[k] not in allowed[k] for k in allowed):
+                continue
             base.update({
                 "device": "CPU",
-                "deterministic": True,
+                "deterministic": det_values[0],
                 "config_id": cid,
             })
             out.append(base)

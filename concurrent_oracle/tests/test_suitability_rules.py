@@ -5,7 +5,7 @@ from concurrent_oracle.harness_analyzer import HarnessAnalyzer
 from concurrent_oracle.harness_loader import HarnessLoader
 from concurrent_oracle.suitability_rules import SuitabilityRules
 
-REAL = Path("/root/fuzz_output_experiment/llm.tf.math.log1p.py")
+REAL = Path(__file__).resolve().parent / "fixtures" / "llm.tf.math.log1p.py"
 
 
 class TestSuitabilityRules(unittest.TestCase):

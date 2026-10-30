@@ -52,6 +52,9 @@ class Reporter:
             lines += [
                 f"- state_model: `{plan.state_model}`",
                 f"- oracles: `{', '.join(plan.oracles)}`",
+                f"- contract_status: `{plan.contract_status.value}`",
+                f"- oracle_contracts: `{json.dumps(plan.oracle_contracts, ensure_ascii=False)}`",
+                f"- unimplemented_oracles: `{json.dumps(plan.metadata.get('unimplemented_oracles', []), ensure_ascii=False)}`",
                 f"- external_threads: {rt.get('external_threads')}",
                 f"- intra_op_threads: {rt.get('intra_op_threads')}",
                 f"- inter_op_threads: {rt.get('inter_op_threads')}",
@@ -63,12 +66,19 @@ class Reporter:
         lines += ["", "## 3. Execution", ""]
         if observation:
             lines += [
+                f"- run_id: `{observation.run_id}`",
+                f"- mode: `{observation.mode}`",
+                f"- trials: {observation.trials}",
+                f"- baseline_run_id: `{observation.baseline_run_id}`",
+                f"- test_run_id: `{observation.test_run_id}`",
                 f"- config_id: `{observation.config_id}`",
                 f"- process_exit_code: {observation.process_exit_code}",
                 f"- process_signal: {observation.process_signal}",
                 f"- observation_complete: {observation.observation_complete}",
                 f"- task_progress: `{json.dumps(observation.task_progress, ensure_ascii=False)}`",
-                f"- runtime: `{json.dumps(observation.runtime, ensure_ascii=False)}`",
+                f"- requested_runtime: `{json.dumps((observation.config or {}).get('runtime', {}), ensure_ascii=False)}`",
+                f"- actual_runtime: `{json.dumps(observation.runtime, ensure_ascii=False)}`",
+                f"- baseline_runtime: `{json.dumps(observation.baseline_runtime, ensure_ascii=False)}`",
             ]
         lines += ["", "## 4. Oracle Results", "", "| oracle | status | reason |", "|---|---|---|"]
         for e in result.oracle_results:

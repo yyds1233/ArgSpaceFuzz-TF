@@ -6,7 +6,7 @@ from pathlib import Path
 
 from concurrent_oracle.harness_loader import HarnessLoader
 
-REAL = Path("/root/fuzz_output_experiment/llm.tf.math.log1p.py")
+REAL = Path(__file__).resolve().parent / "fixtures" / "llm.tf.math.log1p.py"
 
 
 class TestHarnessLoader(unittest.TestCase):
@@ -22,15 +22,15 @@ class TestHarnessLoader(unittest.TestCase):
         self.assertTrue(a.artifact_id.startswith("tf.math.log1p_"))
         self.assertEqual(a.source, "fuzz_api_one")
         self.assertTrue(Path(a.harness_path).is_absolute())
-        self.assertIsNotNone(a.psr_path)
-        self.assertTrue(Path(a.psr_path).exists())
+        # The portable fixture has no source_yaml header; PSR is optional.
+        self.assertTrue(a.psr_path is None or Path(a.psr_path).exists())
 
     def test_load_directory_with_manifest(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
             h1 = td / "llm.tf.nn.relu.py"
             h2 = td / "llm.tf.math.log1p.py"
-            shutil.copy2("/root/fuzz_output_experiment/llm.tf.nn.relu.py", h1)
+            shutil.copy2(REAL, h1)
             shutil.copy2(REAL, h2)
             manifest = td / "manifest.json"
             manifest.write_text(json.dumps([

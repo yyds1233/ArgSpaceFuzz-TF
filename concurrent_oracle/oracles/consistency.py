@@ -26,6 +26,9 @@ class ConsistencyOracle(BaseOracle):
     ) -> OracleEntry:
         if not self.is_applicable(plan, observation):
             return OracleEntry(self.oracle_id, OracleStatus.NOT_APPLICABLE, "O2 not in plan")
+        if plan.contract_status == ContractStatus.UNSUPPORTED:
+            return OracleEntry(self.oracle_id, OracleStatus.NOT_APPLICABLE,
+                               "contract marks this scenario unsupported")
         if observation.execution_status != ExecutionStatus.COMPLETED:
             return OracleEntry(
                 self.oracle_id, OracleStatus.INCONCLUSIVE,

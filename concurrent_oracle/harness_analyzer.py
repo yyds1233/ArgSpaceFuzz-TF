@@ -74,6 +74,37 @@ def _target_names(node: ast.AST) -> List[str]:
     return []
 
 
+def _build_alias_map(tree: ast.AST) -> Dict[str, str]:
+    aliases: Dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "tensorflow":
+                    aliases[alias.asname or "tensorflow"] = "tf"
+                elif alias.name.startswith("tensorflow."):
+                    canonical = "tf." + alias.name[len("tensorflow."):]
+                    aliases[alias.asname or alias.name.split(".")[-1]] = canonical
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                if module == "tensorflow":
+                    aliases[alias.asname or alias.name] = "tf." + alias.name
+                elif module.startswith("tensorflow."):
+                    base = "tf." + module[len("tensorflow."):]
+                    aliases[alias.asname or alias.name] = base + "." + alias.name
+    return aliases
+
+
+def _resolve_alias(name: str, aliases: Dict[str, str]) -> str:
+    parts = name.split(".")
+    if parts[0] in aliases:
+        base = aliases[parts[0]]
+        return base + ("." + ".".join(parts[1:]) if len(parts) > 1 else "")
+    return name
+
+
 def _target_match(call_name: str, api_name: str) -> bool:
     if not call_name or not api_name:
         return False
@@ -104,7 +135,8 @@ class HarnessAnalyzer:
             return result
 
         result.imports = self.extract_imports(tree)
-        result.target_calls = self.extract_target_calls(source, tree, artifact.api_name)
+        aliases = _build_alias_map(tree)
+        result.target_calls = self.extract_target_calls(source, tree, artifact.api_name, aliases)
         result.input_variables = self.extract_input_variables(tree)
         result.resource_variables = self.extract_resource_variables(tree)
         result.callback_functions = self.extract_callback_functions(tree)
@@ -141,7 +173,9 @@ class HarnessAnalyzer:
                                 "kind": "from"})
         return out
 
-    def extract_target_calls(self, source: str, tree: ast.AST, api_name: str) -> List[TargetCall]:
+    def extract_target_calls(self, source: str, tree: ast.AST, api_name: str,
+                             aliases: Optional[Dict[str, str]] = None) -> List[TargetCall]:
+        aliases = aliases or {}
         out: List[TargetCall] = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -149,9 +183,10 @@ class HarnessAnalyzer:
             name = dotted_name(node.func)
             if not name:
                 continue
-            if _target_match(name, api_name):
+            canonical = _resolve_alias(name, aliases)
+            if _target_match(canonical, api_name):
                 out.append(TargetCall(
-                    api_name=name,
+                    api_name=canonical,
                     line=node.lineno,
                     call_expression=_segment(node, source),
                     is_target=True,

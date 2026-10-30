@@ -45,11 +45,19 @@ def observation_from_harness(
             traceback=exc0.get("traceback") or t.get("traceback"),
             started_at=t.get("started_at"),
             finished_at=t.get("finished_at"),
-            metadata={"outputs": t.get("outputs"), "exceptions": exceptions},
+            metadata={
+                "outputs": t.get("outputs"),
+                "exceptions": exceptions,
+                "trial_records": t.get("trial_records") or [],
+                "trials": t.get("trials"),
+            },
         ))
     return ExecutionObservation(
         plan_id=plan_id,
         config_id=config_id,
+        run_id=raw.get("run_id"),
+        mode=raw.get("mode"),
+        trials=raw.get("trials"),
         execution_status=_status(raw.get("execution_status"), ExecutionStatus.PARTIAL),
         process_exit_code=process_exit_code,
         process_signal=process_signal,
@@ -62,6 +70,7 @@ def observation_from_harness(
             "stderr": stderr_path,
             "raw_error": raw.get("error"),
             "raw_traceback": raw.get("traceback"),
+            "shared_input_id": raw.get("shared_input_id"),
         },
         harness_path=harness_path,
         config=dict(config or raw.get("config") or {}),

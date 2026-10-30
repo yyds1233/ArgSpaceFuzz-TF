@@ -9,6 +9,27 @@ from typing import Any, Dict, Iterable, List, Optional
 from .constants import DEFAULT_INPUT_CASES
 
 
+def _has_unsupported_arg(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("kind") == "unsupported_input":
+            return True
+        return any(_has_unsupported_arg(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_unsupported_arg(v) for v in value)
+    return False
+
+
+def count_unsupported_target_cases(captured: Dict[str, Dict[str, Any]]) -> int:
+    count = 0
+    for cap in captured.values():
+        calls = cap.get("target_calls") or []
+        for call in calls:
+            if _has_unsupported_arg(call.get("args") or []) or _has_unsupported_arg(call.get("kwargs") or {}):
+                count += 1
+                break
+    return count
+
+
 class CaseCapture:
     def __init__(self, output_dir: str | Path):
         self.output_dir = Path(output_dir)
@@ -58,3 +79,32 @@ class CaseCapture:
 
     def case_path(self, plan_id: str) -> Path:
         return self.output_dir / "captured_cases" / plan_id / "cases.json"
+
+    def merge_captured_cases(
+        self,
+        plan_id: str,
+        captured: Dict[str, Dict[str, Any]],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        """Merge capture-mode target calls into the existing cases.json atomically."""
+        path = self.case_path(plan_id)
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            payload = {"plan_id": plan_id, "cases": self.default_cases()}
+        for case in payload.get("cases", []):
+            cap = captured.get(case.get("case_id"))
+            if not cap:
+                continue
+            if cap.get("target_calls"):
+                case["target_calls"] = cap["target_calls"]
+                case["case_source"] = cap.get("source", "captured_target_call")
+            else:
+                case["case_source"] = cap.get("source", "bytes_fallback")
+                if cap.get("error"):
+                    case["capture_error"] = cap["error"]
+        payload["capture_metadata"] = metadata or {}
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+        return path
