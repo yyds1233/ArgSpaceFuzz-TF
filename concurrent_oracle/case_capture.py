@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -115,6 +116,50 @@ class CaseCapture:
             })
         return cases
 
+    def corpus_cases(
+        self,
+        api_name: str,
+        corpus_root: str | Path,
+        max_cases: int = 12,
+    ) -> List[Dict[str, Any]]:
+        """Load real ArgFuzz corpus bytes for an API, sampled across sizes.
+
+        The corpus is stored as one directory per API containing raw byte
+        files.  We sort by file size and keep evenly spaced samples so both
+        small and large inputs are represented, then fall back to the eight
+        deterministic smoke cases when the API directory is missing/empty.
+        """
+        d = Path(corpus_root) / api_name
+        if not d.exists():
+            return self.default_cases()
+        files = [
+            p for p in d.iterdir()
+            if p.is_file() and p.stat().st_size > 0
+        ]
+        files.sort(key=lambda p: (p.stat().st_size, p.name))
+        if not files:
+            return self.default_cases()
+        max_cases = max(1, int(max_cases))
+        if len(files) > max_cases:
+            if max_cases > 1:
+                step = (len(files) - 1) / float(max_cases - 1)
+            else:
+                step = 0
+            indices = sorted({int(round(i * step)) for i in range(max_cases)})
+            files = [files[i] for i in indices]
+
+        cases: List[Dict[str, Any]] = []
+        for i, p in enumerate(files):
+            data = p.read_bytes()
+            cases.append({
+                "case_id": f"corpus_{i:03d}",
+                "data_b64": base64.b64encode(data).decode("ascii"),
+                "byte_sha256": hashlib.sha256(data).hexdigest(),
+                "origin_path": str(p),
+                "source": "argfuzz_corpus",
+            })
+        return cases
+
     def write_cases(
         self,
         plan_id: str,
@@ -151,6 +196,30 @@ class CaseCapture:
 
     def case_path(self, plan_id: str) -> Path:
         return self.output_dir / "captured_cases" / plan_id / "cases.json"
+
+    def mark_ineligible(
+        self,
+        plan_id: str,
+        case_ids: Iterable[str],
+        reason: str,
+    ) -> int:
+        """Mark cases that failed baseline replay as ineligible, atomically."""
+        path = self.case_path(plan_id)
+        if not path.exists():
+            return 0
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        changed = 0
+        wanted = set(case_ids)
+        for case in payload.get("cases", []):
+            if case.get("case_id") in wanted and case.get("eligible", True):
+                case["eligible"] = False
+                case["ineligible_reason"] = reason
+                changed += 1
+        if changed:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        return changed
 
     def merge_captured_cases(
         self,

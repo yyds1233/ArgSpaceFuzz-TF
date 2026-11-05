@@ -23,6 +23,9 @@ class HarnessTransformer:
         self.template_path = Path(template_path) if template_path else (
             Path(__file__).resolve().parent / "templates" / "concurrent_harness.py"
         )
+        self.recipe_template_path = (
+            Path(__file__).resolve().parent / "templates" / "recipe_harness.py"
+        )
 
     def _target_patches(self, analysis: HarnessAnalysis) -> List[str]:
         patches: List[str] = []
@@ -32,16 +35,65 @@ class HarnessTransformer:
                 patches.append(name)
         return patches
 
+    def _transform_recipe(
+        self,
+        artifact: HarnessArtifact,
+        plan: ConcurrentTestPlan,
+        backend: str,
+        gen_dir: Path,
+        harness_out: Path,
+        record_path: Path,
+    ) -> ConcurrentHarnessArtifact:
+        """Copy the recipe template; no target-call patching is required."""
+        template = self.recipe_template_path.read_text(encoding="utf-8")
+        harness_out.write_text(template, encoding="utf-8")
+        record = {
+            "plan_id": plan.plan_id,
+            "artifact_id": artifact.artifact_id,
+            "api_name": artifact.api_name,
+            "source_harness": str(Path(artifact.harness_path).resolve()),
+            "source_hash": artifact.harness_hash,
+            "backend": backend,
+            "recipe": plan.metadata.get("recipe"),
+            "scenario": plan.scenario,
+            "runtime": plan.runtime,
+            "oracles": plan.oracles,
+            "generation_status": "GENERATED",
+            "generation_attempt": 1,
+            "template": str(self.recipe_template_path),
+            "warnings": [],
+            "generated_at": time.time(),
+        }
+        record_path.write_text(json.dumps(record, indent=2, ensure_ascii=False),
+                               encoding="utf-8")
+        return ConcurrentHarnessArtifact(
+            artifact_id=artifact.artifact_id,
+            source_harness=str(Path(artifact.harness_path).resolve()),
+            concurrent_harness=str(harness_out),
+            plan_id=plan.plan_id,
+            generation_status=GenerationStatus.GENERATED,
+            validation_status=ValidationStatus.PENDING,
+            generation_attempt=1,
+            oracle_bindings=list(plan.oracles),
+            transform_record=record,
+        )
+
     def transform(
         self,
         artifact: HarnessArtifact,
         analysis: HarnessAnalysis,
         plan: ConcurrentTestPlan,
+        cases: Optional[List[Dict[str, Any]]] = None,
     ) -> ConcurrentHarnessArtifact:
         gen_dir = self.output_dir / "generated_harnesses" / plan.plan_id
         gen_dir.mkdir(parents=True, exist_ok=True)
         harness_out = gen_dir / "concurrent_harness.py"
         record_path = gen_dir / "transform_record.json"
+
+        backend = str((plan.metadata or {}).get("backend", ""))
+        if backend in {"tfdata_recipe", "callback_recipe"}:
+            return self._transform_recipe(artifact, plan, backend, gen_dir,
+                                          harness_out, record_path)
 
         patches = self._target_patches(analysis)
         if not patches:
@@ -66,8 +118,9 @@ class HarnessTransformer:
             )
 
         capture = CaseCapture(self.output_dir)
-        cases_path = capture.write_cases(plan.plan_id, metadata={
-            "source": "deterministic_defaults",
+        case_source = "argfuzz_corpus" if cases else "deterministic_defaults"
+        cases_path = capture.write_cases(plan.plan_id, cases=cases, metadata={
+            "source": case_source,
             "original_harness": artifact.harness_path,
             "api_name": artifact.api_name,
         })
@@ -97,7 +150,7 @@ class HarnessTransformer:
             "source_hash": artifact.harness_hash,
             "target_patches": patches,
             "cases_path": str(cases_path),
-            "case_source": plan.case_source,
+            "case_source": case_source,
             "scenario": plan.scenario,
             "runtime": plan.runtime,
             "oracles": plan.oracles,

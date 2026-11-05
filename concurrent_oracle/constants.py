@@ -3,6 +3,23 @@ from __future__ import annotations
 
 ORACLE_IDS = ("O1", "O2", "O3", "O4", "O5", "O6", "O7", "O8", "O9")
 
+# Expected TensorFlow/Python input-validation exceptions for O1/O5.  An API
+# contract can override this list via plan.metadata["expected_exception_types"].
+DEFAULT_INVALID_INPUT_EXCEPTIONS = (
+    "InvalidArgumentError",
+    "ValueError",
+    "TypeError",
+    "IndexError",
+    "KeyError",
+    "NotFoundError",
+    "FailedPreconditionError",
+    "OutOfRangeError",
+    "UnimplementedError",
+    "ResourceExhaustedError",
+    "InternalError",
+    "AbortedError",
+)
+
 ORACLE_NAMES = {
     "O1": "invalid_input_and_safety",
     "O2": "serial_parallel_consistency",
@@ -65,15 +82,15 @@ INPUT_CLASSES = (
 # Default scenario -> oracle mapping.  The scenario generator may narrow this
 # based on the contract registry and the harness analysis.
 SCENARIO_ORACLES = {
-    "independent_api_calls": ["O2", "O3", "O4"],
-    "shared_readonly_input": ["O3", "O4"],
+    "independent_api_calls": ["O2", "O3", "O4", "O9"],
+    "shared_readonly_input": ["O3", "O4", "O9"],
     "shared_resource_access": ["O3", "O4", "O5"],
-    "parallel_kernel_execution": ["O2", "O8"],
-    "tfdata_parallel_map": ["O2", "O3", "O6"],
-    "tfdata_interleave": ["O3", "O6"],
-    "tfdata_early_stop": ["O6", "O7"],
-    "python_callback_lifecycle": ["O7", "O8"],
-    "exception_recovery": ["O5", "O7"],
+    "parallel_kernel_execution": ["O2", "O8", "O9"],
+    "tfdata_parallel_map": ["O6"],
+    "tfdata_interleave": ["O6"],
+    "tfdata_early_stop": ["O6"],
+    "python_callback_lifecycle": ["O7"],
+    "exception_recovery": ["O5"],
     "invalid_input_cpu": ["O1", "O9"],
 }
 
@@ -87,6 +104,9 @@ RUNTIME_MATRIX = {
     "C05": {"external_threads": 4, "intra_op_threads": 2, "inter_op_threads": 2, "tf_data_parallel_calls": 1},
     "C06": {"external_threads": 1, "intra_op_threads": 1, "inter_op_threads": 1, "tf_data_parallel_calls": 4},
     "C07": {"external_threads": 4, "intra_op_threads": 1, "inter_op_threads": 1, "tf_data_parallel_calls": 4},
+    "C08": {"external_threads": 8, "intra_op_threads": 1, "inter_op_threads": 1, "tf_data_parallel_calls": 1},
+    "C09": {"external_threads": 1, "intra_op_threads": 8, "inter_op_threads": 1, "tf_data_parallel_calls": 1},
+    "C10": {"external_threads": 4, "intra_op_threads": 4, "inter_op_threads": 2, "tf_data_parallel_calls": 1},
 }
 
 # Scenarios that are meaningful with the first-version CPU implementation.
@@ -99,45 +119,51 @@ SCENARIO_CAPABILITIES = {
     "independent_api_calls": {
         "implemented": True,
         "backend": "captured_target_replay_independent",
-        "oracles": ["O2", "O3"],
+        "oracles": ["O2", "O3", "O4", "O9"],
     },
     "shared_readonly_input": {
         "implemented": True,
         "backend": "shared_target_args",
-        "oracles": ["O3"],
+        "oracles": ["O3", "O4", "O9"],
     },
     "parallel_kernel_execution": {
         "implemented": True,
         "backend": "captured_target_replay_internal_threads",
-        "oracles": ["O2", "O3"],
+        "oracles": ["O2", "O3", "O8", "O9"],
     },
     "shared_resource_access": {
         "implemented": False,
         "reason": "shared mutable TensorFlow resource backend is P1",
     },
     "tfdata_parallel_map": {
-        "implemented": False,
-        "reason": "tf.data consumption backend is P2",
+        "implemented": True,
+        "backend": "tfdata_recipe",
+        "oracles": ["O6"],
     },
     "tfdata_interleave": {
-        "implemented": False,
-        "reason": "tf.data consumption backend is P2",
+        "implemented": True,
+        "backend": "tfdata_recipe",
+        "oracles": ["O6"],
     },
     "tfdata_early_stop": {
-        "implemented": False,
-        "reason": "tf.data lifecycle backend is P2",
+        "implemented": True,
+        "backend": "tfdata_recipe",
+        "oracles": ["O6"],
     },
     "python_callback_lifecycle": {
-        "implemented": False,
-        "reason": "callback lifecycle backend is P2",
+        "implemented": True,
+        "backend": "callback_recipe",
+        "oracles": ["O7"],
     },
     "exception_recovery": {
-        "implemented": False,
-        "reason": "exception isolation/recovery backend is P2",
+        "implemented": True,
+        "backend": "exception_recovery_replay",
+        "oracles": ["O5"],
     },
     "invalid_input_cpu": {
-        "implemented": False,
-        "reason": "invalid-input backend is P2",
+        "implemented": True,
+        "backend": "invalid_input_replay",
+        "oracles": ["O1", "O9"],
     },
 }
 

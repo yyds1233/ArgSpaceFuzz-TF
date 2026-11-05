@@ -105,6 +105,17 @@ def _resolve_alias(name: str, aliases: Dict[str, str]) -> str:
     return name
 
 
+def _dataset_vars(tree: ast.AST) -> set[str]:
+    """Variables assigned from a tf.data constructor, e.g. ds = ...Dataset..."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            call = dotted_name(node.value.func) or ""
+            if call.startswith("tf.data.") or call == "tf.data.Dataset":
+                names.update(_assigned_names(node))
+    return names
+
+
 def _target_match(call_name: str, api_name: str) -> bool:
     if not call_name or not api_name:
         return False
@@ -176,6 +187,7 @@ class HarnessAnalyzer:
     def extract_target_calls(self, source: str, tree: ast.AST, api_name: str,
                              aliases: Optional[Dict[str, str]] = None) -> List[TargetCall]:
         aliases = aliases or {}
+        dataset_vars = _dataset_vars(tree)
         out: List[TargetCall] = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -184,9 +196,20 @@ class HarnessAnalyzer:
             if not name:
                 continue
             canonical = _resolve_alias(name, aliases)
-            if _target_match(canonical, api_name):
+            matched = _target_match(canonical, api_name)
+            # Method-style dataset calls (ds.map / ds.interleave) are not
+            # reachable as `tf.data.Dataset.map` through dotted_name(); match
+            # them when the receiver was created from a tf.data constructor.
+            if not matched and api_name.startswith("tf.data.Dataset."):
+                leaf = api_name.split(".")[-1].lower()
+                root = canonical.split(".")[0]
+                if canonical.split(".")[-1].lower() == leaf and (
+                    root in dataset_vars or "tf.data" in _segment(node, source)
+                ):
+                    matched = True
+            if matched:
                 out.append(TargetCall(
-                    api_name=canonical,
+                    api_name=canonical if canonical.startswith("tf.") else api_name,
                     line=node.lineno,
                     call_expression=_segment(node, source),
                     is_target=True,

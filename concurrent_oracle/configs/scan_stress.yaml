@@ -1,0 +1,43 @@
+framework: tensorflow
+
+paths:
+  corpus_dir: /root/corpus_experiment_save
+
+environment:
+  device: CPU
+  cuda_visible_devices: "-1"
+  require_cpu_only: true
+  multiprocessing_start_method: spawn
+
+runtime:
+  external_threads: [1, 8]
+  intra_op_threads: [1, 8]
+  inter_op_threads: [1]
+  tf_data_parallel_calls: [1]
+  deterministic: [true]
+
+generation:
+  max_repair_attempts: 1
+  use_template_first: true
+  use_llm_transform: false
+
+execution:
+  trials: 5
+  timeout_seconds: 60
+  no_progress_timeout_seconds: 20
+  max_parallel_processes: 1
+  cases_per_api: 12
+  process_repetitions: 2
+
+oracle_enabled: [O2, O3, O8]
+
+comparison:
+  float_atol: 1.0e-6
+  float_rtol: 1.0e-5
+  exact_integer: true
+  compare_nan_mask: true
+  compare_inf_sign: true
+
+sanitizer:
+  enabled: false
+  type: none

@@ -140,7 +140,7 @@ class TestOracleEngine(unittest.TestCase):
                                  plan(oracles=("O2", "O3", "O4")))
         by = {e.oracle_id: e for e in r.oracle_results}
         self.assertEqual(by["O4"].status, OracleStatus.INCONCLUSIVE)
-        self.assertIn("not implemented", by["O4"].reason)
+        self.assertIn("no input-preservation observation", by["O4"].reason)
 
 
 if __name__ == "__main__":

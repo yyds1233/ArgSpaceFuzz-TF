@@ -18,6 +18,7 @@ class PathsConfig:
     output_dir: str = "concurrent_oracle/outputs"
     contract_dir: str = "concurrent_oracle/contracts/tensorflow"
     template_dir: str = "concurrent_oracle/templates"
+    corpus_dir: str = "/root/corpus_experiment_save"
 
 
 @dataclass
@@ -50,6 +51,8 @@ class ExecutionConfig:
     timeout_seconds: int = 60
     no_progress_timeout_seconds: int = 20
     max_parallel_processes: int = 1
+    cases_per_api: int = 12
+    process_repetitions: int = 1
 
 
 @dataclass
@@ -66,6 +69,10 @@ class SanitizerConfig:
     enabled: bool = False
     type: str = "none"
     log_path: Optional[str] = None
+    build_id: Optional[str] = None
+    instrumented: Optional[bool] = None
+    options: str = ""
+    preload_path: Optional[str] = None
 
 
 @dataclass

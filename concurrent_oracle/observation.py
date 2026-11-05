@@ -35,6 +35,7 @@ def observation_from_harness(
     for t in raw.get("tasks") or []:
         exceptions = t.get("exceptions") or []
         exc0 = exceptions[0] if exceptions else {}
+        raw_meta = t.get("metadata") if isinstance(t.get("metadata"), dict) else {}
         tasks.append(TaskObservation(
             task_id=int(t.get("task_id", -1)),
             input_id=str(t.get("input_id", "")),
@@ -58,6 +59,16 @@ def observation_from_harness(
                 "expected_calls": t.get("expected_calls"),
                 "actual_calls": t.get("actual_calls"),
                 "arg_conversions": t.get("arg_conversions") or [],
+                # O1/O4/O5/O6/O7 metadata produced by the template/recipe.
+                "input_preservation": t.get("input_preservation"),
+                "invalid_input": t.get("invalid_input"),
+                "phase": t.get("phase"),
+                "dataset": t.get("dataset"),
+                "datasets": t.get("datasets"),
+                "callbacks": t.get("callbacks"),
+                "callback_records": t.get("callback_records"),
+                "recipe": t.get("recipe"),
+                **raw_meta,
             },
         ))
     return ExecutionObservation(

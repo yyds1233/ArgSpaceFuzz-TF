@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .api_suitability_analyzer import APISuitabilityAnalyzer
+from .case_capture import CaseCapture
 from .config import ModuleConfig, load_config
 from .contract_registry import ContractRegistry
 from .harness_analyzer import HarnessAnalyzer
@@ -56,7 +57,9 @@ class ConcurrentOraclePipeline:
 
         self.loader = HarnessLoader()
         self.analyzer = HarnessAnalyzer()
-        self.rules = SuitabilityRules()
+        self.rules = SuitabilityRules({
+            "enabled_oracles": list(self.config.oracle_enabled),
+        })
         self.contract_registry = ContractRegistry(_resolve(self.config.paths.contract_dir))
         self.suitability = APISuitabilityAnalyzer(
             rules=self.rules,
@@ -69,11 +72,14 @@ class ConcurrentOraclePipeline:
             contract_registry=self.contract_registry,
         )
         self.transformer = HarnessTransformer(self.output_dir)
+        self.case_capture = CaseCapture(self.output_dir)
         self.validator = HarnessValidator(self.output_dir, python_path=sys.executable)
         self.runner = ConcurrentRunner(
             self.output_dir,
             python_path=sys.executable,
             no_progress_timeout=float(self.config.execution.no_progress_timeout_seconds),
+            process_repetitions=int(self.config.execution.process_repetitions),
+            sanitizer=to_jsonable(self.config.sanitizer),
         )
         self.oracle_engine = OracleEngine()
         self.reporter = Reporter()
@@ -125,8 +131,9 @@ class ConcurrentOraclePipeline:
         artifact: HarnessArtifact,
         analysis: HarnessAnalysis,
         plan: ConcurrentTestPlan,
+        cases: Optional[List[Dict[str, Any]]] = None,
     ) -> ConcurrentHarnessArtifact:
-        art = self.transformer.transform(artifact, analysis, plan)
+        art = self.transformer.transform(artifact, analysis, plan, cases=cases)
         gen_dir = self.gen_dir(plan.plan_id)
         write_json(gen_dir / "concurrent_harness_artifact.json", art)
         return art
@@ -221,35 +228,52 @@ class ConcurrentOraclePipeline:
                   f"config={plan.runtime.get('config_id')} "
                   f"contract={plan.contract_status.value}", flush=True)
             try:
-                art = self.generate(artifact, analysis, plan)
+                recipe_backend = plan.metadata.get("backend") in {
+                    "tfdata_recipe", "callback_recipe"
+                }
+                cases = None if recipe_backend else self.case_capture.corpus_cases(
+                    artifact.api_name,
+                    self.config.paths.corpus_dir,
+                    self.config.execution.cases_per_api,
+                )
+                art = self.generate(artifact, analysis, plan, cases=cases)
                 if not art.concurrent_harness:
                     summary["errors"].append({"plan_id": plan.plan_id,
                                               "stage": "generate", "reason": "no harness generated"})
                     continue
-                capture = self.runner.capture_cases(art, plan)
-                summary.setdefault("captures", []).append({"plan_id": plan.plan_id, **capture})
-                if capture.get("status") != "SKIPPED":
-                    if not capture.get("cases_eligible"):
-                        summary["errors"].append({
-                            "plan_id": plan.plan_id, "stage": "capture",
-                            "reason": "no eligible replayable case; strict path does not "
-                                      "fall back to raw TestOneInput bytes",
-                            "ineligible_reasons": capture.get("ineligible_reasons", []),
-                        })
+                if recipe_backend:
+                    # Recipe scenarios test the tf.data/callback contract; they
+                    # do not replay the original harness, so capture/static
+                    # target-call validation is not applicable.
+                    capture = {"status": "SKIPPED", "reason": "recipe backend"}
+                    val = {"ok": True}
+                else:
+                    capture = self.runner.capture_cases(art, plan)
+                    summary.setdefault("captures", []).append(
+                        {"plan_id": plan.plan_id, **capture}
+                    )
+                    if capture.get("status") != "SKIPPED":
+                        if not capture.get("cases_eligible"):
+                            summary["errors"].append({
+                                "plan_id": plan.plan_id, "stage": "capture",
+                                "reason": "no eligible replayable case; strict path does not "
+                                          "fall back to raw TestOneInput bytes",
+                                "ineligible_reasons": capture.get("ineligible_reasons", []),
+                            })
+                            continue
+                        if capture.get("cases_ineligible"):
+                            summary.setdefault("capture_warnings", []).append({
+                                "plan_id": plan.plan_id,
+                                "message": f"{capture['cases_ineligible']} ineligible case(s) skipped",
+                                "details": capture.get("ineligible_reasons", []),
+                            })
+                    # Static validation only here; runner.run performs the isolated
+                    # baseline and concurrent processes.
+                    val = self.validate(art, plan, run_baseline=False)
+                    if not val.get("ok"):
+                        summary["errors"].append({"plan_id": plan.plan_id, "stage": "validate",
+                                                  "reason": "static validation failed"})
                         continue
-                    if capture.get("cases_ineligible"):
-                        summary.setdefault("capture_warnings", []).append({
-                            "plan_id": plan.plan_id,
-                            "message": f"{capture['cases_ineligible']} ineligible case(s) skipped",
-                            "details": capture.get("ineligible_reasons", []),
-                        })
-                # Static validation only here; runner.run performs the isolated
-                # baseline and concurrent processes.
-                val = self.validate(art, plan, run_baseline=False)
-                if not val.get("ok"):
-                    summary["errors"].append({"plan_id": plan.plan_id, "stage": "validate",
-                                              "reason": "static validation failed"})
-                    continue
                 obs = self.run(art, plan)
                 if obs.execution_status.value not in ("COMPLETED", "PARTIAL"):
                     summary["errors"].append({

@@ -26,6 +26,26 @@ def _new_run_id(prefix: str) -> str:
     return f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
 
+def baseline_covers_tasks(
+    baseline_obs: ExecutionObservation,
+    test_obs: ExecutionObservation,
+) -> bool:
+    """A baseline is valid only for the cases the test actually uses."""
+    if baseline_obs.execution_status != ExecutionStatus.COMPLETED:
+        return False
+    used_input_ids = {t.input_id for t in (test_obs.tasks or [])}
+    baseline = baseline_obs.baseline or {}
+    return all((baseline.get(input_id) or {}).get("complete") for input_id in used_input_ids)
+
+
+def _baseline_bad_cases(obs: ExecutionObservation) -> list[str]:
+    return [
+        case_id
+        for case_id, entry in (obs.baseline or {}).items()
+        if not isinstance(entry, dict) or not entry.get("complete")
+    ]
+
+
 class ConcurrentRunner:
     def __init__(
         self,
@@ -34,12 +54,22 @@ class ConcurrentRunner:
         preload_path: Optional[str] = ASAN_SO,
         timeout_grace: int = 30,
         no_progress_timeout: float = 20.0,
+        process_repetitions: int = 1,
+        sanitizer: Optional[Dict[str, Any]] = None,
     ):
         self.output_dir = Path(output_dir).resolve()
         self.python_path = python_path or sys.executable
         self.timeout_grace = timeout_grace
         self.no_progress_timeout = no_progress_timeout
-        self.pm = ProcessManager(self.python_path, preload_path=preload_path)
+        self.process_repetitions = max(1, int(process_repetitions))
+        self.sanitizer = dict(sanitizer or {})
+        effective_preload = preload_path
+        if self.sanitizer:
+            if not self.sanitizer.get("enabled"):
+                effective_preload = None
+            elif self.sanitizer.get("preload_path"):
+                effective_preload = self.sanitizer["preload_path"]
+        self.pm = ProcessManager(self.python_path, preload_path=effective_preload)
         self.case_capture = CaseCapture(self.output_dir)
 
     # ── paths ──────────────────────────────────────────────────
@@ -60,6 +90,52 @@ class ConcurrentRunner:
         if flagged:
             return any(c.get("eligible") for c in flagged)
         return any(c.get("target_calls") for c in cases)
+
+    def _sanitizer_report(self, stderr: str, exit_code: Optional[int],
+                          signal: Optional[str], stderr_path: Optional[Path]) -> Dict[str, Any]:
+        """Parse ASan/TSan/UBSan/MSan output into an O9 evidence record."""
+        enabled = bool(self.sanitizer.get("enabled"))
+        stype = str(self.sanitizer.get("type", "none") or "none")
+        text = stderr or ""
+        explicit_instrumented = self.sanitizer.get("instrumented")
+        if explicit_instrumented is None:
+            # A preload library alone does not prove the target was compiled
+            # with sanitizer instrumentation; require a build id for PASS.
+            instrumented = bool(self.sanitizer.get("build_id"))
+        else:
+            instrumented = bool(explicit_instrumented)
+        report = {
+            "enabled": enabled,
+            "type": stype,
+            "detected": False,
+            "instrumented": instrumented,
+            "build_id": self.sanitizer.get("build_id"),
+            "raw_path": str(stderr_path) if stderr_path else None,
+            "exit_code": exit_code,
+            "signal": signal,
+            "summary": None,
+            "stack": [],
+        }
+        if not enabled:
+            return report
+        patterns = [
+            ("AddressSanitizer", "ERROR: AddressSanitizer:", "AddressSanitizer"),
+            ("ThreadSanitizer", "WARNING: ThreadSanitizer:", "ThreadSanitizer"),
+            ("MemorySanitizer", "WARNING: MemorySanitizer:", "MemorySanitizer"),
+            ("UndefinedBehaviorSanitizer", "runtime error:", "UBSan"),
+        ]
+        for report_type, needle, short in patterns:
+            if needle in text:
+                report.update({"detected": True, "report_type": short})
+                lines = text.splitlines()
+                for i, line in enumerate(lines):
+                    if needle in line:
+                        report["summary"] = line.strip()[:1000]
+                        report["stack"] = [x.strip()[:500] for x in lines[i: i + 20]
+                                           if x.strip().startswith("#")]
+                        break
+                break
+        return report
 
     def _run_dirs(self, plan: ConcurrentTestPlan, mode: str, run_id: str) -> Dict[str, Path]:
         d = self.output_dir / "executions" / plan.plan_id / mode / run_id
@@ -85,6 +161,7 @@ class ConcurrentRunner:
         runtime: Dict[str, Any],
         run_id: str,
         trials: int,
+        case_offset: int = 0,
     ) -> Tuple[ExecutionObservation, Dict[str, Path]]:
         harness = Path(artifact.concurrent_harness).resolve()
         paths = self._run_dirs(plan, mode, run_id)
@@ -99,20 +176,48 @@ class ConcurrentRunner:
             "trials": int(trials),
             "runtime": runtime,
             "cases_path": str(self.cases_path(plan)),
+            "case_offset": int(case_offset),
+            "backend": (plan.metadata or {}).get("backend"),
+            "invalid_arg": (plan.metadata or {}).get("invalid_arg"),
+            "recipe": (plan.metadata or {}).get("recipe"),
             "output_path": str(paths["obs"]),
             "events_path": str(paths["events"]),
         }
         write_json(paths["cfg"], cfg)
 
+        env_extra: Dict[str, str] = {}
+        if self.sanitizer.get("enabled") and self.sanitizer.get("options"):
+            stype = str(self.sanitizer.get("type", "")).lower()
+            if "tsan" in stype:
+                env_extra["TSAN_OPTIONS"] = str(self.sanitizer["options"])
+            elif "msan" in stype:
+                env_extra["MSAN_OPTIONS"] = str(self.sanitizer["options"])
+            else:
+                env_extra["ASAN_OPTIONS"] = str(self.sanitizer["options"])
         pr = self.pm.run(
             [self.python_path, str(harness), str(paths["cfg"])],
             cwd=paths["dir"],
             timeout=plan.timeout_seconds + self.timeout_grace,
             events_path=paths["events"],
             no_progress_timeout=self.no_progress_timeout,
+            env_extra=env_extra or None,
         )
         paths["stdout"].write_text(pr.stdout or "", encoding="utf-8")
         paths["stderr"].write_text(pr.stderr or "", encoding="utf-8")
+        sanitizer_text = pr.stderr or ""
+        sanitizer_path = paths["stderr"]
+        log_path = self.sanitizer.get("log_path")
+        if self.sanitizer.get("enabled") and log_path and Path(log_path).exists():
+            try:
+                sanitizer_text += "\n" + Path(log_path).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+                sanitizer_path = Path(log_path)
+            except Exception:
+                pass
+        sanitizer_report = self._sanitizer_report(
+            sanitizer_text, pr.rc, pr.signal, sanitizer_path
+        )
 
         raw: Optional[Dict[str, Any]] = None
         if paths["obs"].exists():
@@ -222,6 +327,7 @@ class ConcurrentRunner:
             )
         obs.diagnostics.setdefault("events", str(paths["events"]))
         obs.diagnostics.setdefault("run_dir", str(paths["dir"]))
+        obs.diagnostics["sanitizer"] = sanitizer_report
         save_observation(obs, paths["execution"])
         return obs, paths
 
@@ -282,6 +388,40 @@ class ConcurrentRunner:
     # ── full baseline + concurrent run ─────────────────────────
 
     def run(self, artifact: ConcurrentHarnessArtifact, plan: ConcurrentTestPlan) -> ExecutionObservation:
+        backend = str((plan.metadata or {}).get("backend", ""))
+        if backend in {"tfdata_recipe", "callback_recipe"}:
+            run_id = _new_run_id("recipe")
+            obs, paths = self._run_mode(
+                artifact, plan, mode="recipe", runtime=dict(plan.runtime),
+                run_id=run_id, trials=max(1, int(plan.trials)), case_offset=0,
+            )
+            obs.test_run_id = run_id
+            obs.mode = "recipe"
+            obs.diagnostics["backend"] = backend
+            obs.diagnostics["test_observation"] = str(paths["execution"])
+            combined = paths["dir"] / "combined_observation.json"
+            save_observation(obs, combined)
+            obs.diagnostics["combined_observation"] = str(combined)
+            return obs
+
+        if backend in {"invalid_input_replay", "exception_recovery_replay"}:
+            if not self._has_eligible_cases(plan):
+                self.capture_cases(artifact, plan)
+            mode = "invalid_input" if backend == "invalid_input_replay" else "exception_recovery"
+            run_id = _new_run_id(mode)
+            obs, paths = self._run_mode(
+                artifact, plan, mode=mode, runtime=dict(plan.runtime),
+                run_id=run_id, trials=1, case_offset=0,
+            )
+            obs.test_run_id = run_id
+            obs.mode = mode
+            obs.diagnostics["backend"] = backend
+            obs.diagnostics["test_observation"] = str(paths["execution"])
+            combined = paths["dir"] / "combined_observation.json"
+            save_observation(obs, combined)
+            obs.diagnostics["combined_observation"] = str(combined)
+            return obs
+
         if not self._has_eligible_cases(plan):
             self.capture_cases(artifact, plan)
 
@@ -293,24 +433,59 @@ class ConcurrentRunner:
             baseline_runtime["intra_op_threads"] = 1
             baseline_runtime["inter_op_threads"] = 1
         baseline_runtime["config_id"] = str(plan.runtime.get("config_id", "config")) + "_baseline"
-        baseline_run_id = _new_run_id("baseline")
-        baseline_obs, baseline_paths = self._run_mode(
-            artifact, plan, mode="baseline", runtime=baseline_runtime,
-            run_id=baseline_run_id, trials=trials,
-        )
+
+        baseline_obs: Optional[ExecutionObservation] = None
+        baseline_paths: Optional[Dict[str, Path]] = None
+        baseline_run_id: Optional[str] = None
+        baseline_excluded: list[str] = []
+        baseline_attempts = 0
+        for _attempt in range(3):
+            baseline_attempts += 1
+            baseline_run_id = _new_run_id("baseline")
+            baseline_obs, baseline_paths = self._run_mode(
+                artifact, plan, mode="baseline", runtime=baseline_runtime,
+                run_id=baseline_run_id, trials=trials,
+            )
+            bad = _baseline_bad_cases(baseline_obs)
+            if not bad:
+                break
+            changed = self.case_capture.mark_ineligible(
+                plan.plan_id, bad, "baseline_not_complete"
+            )
+            baseline_excluded.extend(bad)
+            if not changed:
+                break
+        assert baseline_obs is not None and baseline_paths is not None
 
         test_runtime = dict(plan.runtime)
-        test_run_id = _new_run_id("test")
-        test_obs, test_paths = self._run_mode(
-            artifact, plan, mode="concurrent", runtime=test_runtime,
-            run_id=test_run_id, trials=trials,
-        )
+        reps = max(1, int(self.process_repetitions))
+        n_threads = max(1, int(test_runtime.get("external_threads", 1)))
+        test_runs = []
+        for rep in range(reps):
+            rep_run_id = _new_run_id(f"test_rep{rep}")
+            rep_obs, rep_paths = self._run_mode(
+                artifact, plan, mode="concurrent", runtime=test_runtime,
+                run_id=rep_run_id, trials=trials, case_offset=rep * n_threads,
+            )
+            test_runs.append((rep, rep_run_id, rep_obs, rep_paths))
 
-        baseline_ok = (baseline_obs.execution_status == ExecutionStatus.COMPLETED
-                       and baseline_obs.observation_complete)
+        if reps == 1:
+            _rep, test_run_id, test_obs, test_paths = test_runs[0]
+            test_obs.diagnostics["process_repetitions"] = 1
+            test_obs.diagnostics["test_run_ids"] = [test_run_id]
+        else:
+            test_obs, test_paths = self._merge_test_runs(plan, test_runs, trials)
+            test_run_id = test_obs.test_run_id
+
+        baseline_ok = baseline_covers_tasks(baseline_obs, test_obs)
         test_obs.baseline_run_id = baseline_run_id
         test_obs.test_run_id = test_run_id
         test_obs.baseline_runtime = dict(baseline_obs.runtime or {})
+        test_obs.diagnostics["process_repetitions"] = reps
+        test_obs.diagnostics["baseline_qualification"] = {
+            "attempts": baseline_attempts,
+            "excluded_cases": sorted(set(baseline_excluded)),
+        }
         if baseline_ok:
             test_obs.baseline = baseline_obs.baseline or {}
         else:
@@ -329,6 +504,49 @@ class ConcurrentRunner:
         save_observation(test_obs, combined)
         test_obs.diagnostics["combined_observation"] = str(combined)
         return test_obs
+
+    def _merge_test_runs(
+        self,
+        plan: ConcurrentTestPlan,
+        test_runs,
+        trials: int,
+    ) -> Tuple[ExecutionObservation, Dict[str, Path]]:
+        """Merge repeated concurrent processes into one observation."""
+        _rep0, _run0, base_obs, base_paths = test_runs[0]
+        tasks = []
+        statuses = []
+        test_run_ids = []
+        progress = {"submitted": 0, "started": 0, "completed": 0,
+                    "partial": 0, "failed": 0, "pending": 0}
+        for _rep, run_id, obs, _paths in test_runs:
+            statuses.append(obs.execution_status.value)
+            test_run_ids.append(run_id)
+            for key in progress:
+                progress[key] += int((obs.task_progress or {}).get(key, 0) or 0)
+            for task in obs.tasks or []:
+                task.task_id = len(tasks)
+                tasks.append(task)
+        complete = all(bool(obs.observation_complete) for _r, _id, obs, _p in test_runs)
+        if all(s == ExecutionStatus.COMPLETED.value for s in statuses):
+            execution_status = ExecutionStatus.COMPLETED
+        else:
+            execution_status = next(
+                (ExecutionStatus(s) for s in statuses if s != ExecutionStatus.COMPLETED.value),
+                ExecutionStatus.PARTIAL,
+            )
+        base_obs.run_id = base_obs.run_id or test_run_ids[0]
+        base_obs.test_run_id = test_run_ids[0]
+        base_obs.execution_status = execution_status
+        base_obs.observation_complete = complete
+        base_obs.tasks = tasks
+        base_obs.task_progress = progress
+        base_obs.diagnostics["process_repetitions"] = len(test_runs)
+        base_obs.diagnostics["test_run_ids"] = test_run_ids
+        base_obs.diagnostics["test_statuses"] = statuses
+        base_obs.diagnostics["test_events"] = [
+            str(p["events"]) for _r, _id, _o, p in test_runs
+        ]
+        return base_obs, base_paths
 
     def run_one_config(self, artifact: ConcurrentHarnessArtifact,
                        plan: ConcurrentTestPlan, config: Dict[str, Any],

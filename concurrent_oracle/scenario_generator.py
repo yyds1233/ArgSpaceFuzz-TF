@@ -115,6 +115,10 @@ class ScenarioGenerator:
             idx = len(plans)
             scenario_id = scenario.scenario_id
             plan_id = make_plan_id(suitability.artifact_id, scenario_id, idx)
+            capability = SCENARIO_CAPABILITIES.get(scenario_id) or {}
+            backend = capability.get("backend", "")
+            recipe = self._recipe_for(scenario_id, runtime)
+            recipe_backend = backend in {"tfdata_recipe", "callback_recipe"}
             plans.append(ConcurrentTestPlan(
                 plan_id=plan_id,
                 artifact_id=suitability.artifact_id,
@@ -126,7 +130,7 @@ class ScenarioGenerator:
                 oracle_contracts=oracle_contracts,
                 trials=trials,
                 timeout_seconds=timeout,
-                case_source=f"captured_cases/{plan_id}",
+                case_source="recipe" if recipe_backend else f"captured_cases/{plan_id}",
                 expected_relation=_EXPECTED_RELATION.get(scenario_id, "GENERIC_OBSERVATION"),
                 metadata={
                     "api_name": api_name,
@@ -135,9 +139,33 @@ class ScenarioGenerator:
                     "config_id": runtime.get("config_id"),
                     "api_categories": list(suitability.api_categories),
                     "unimplemented_oracles": unimplemented_oracles,
+                    "backend": backend,
+                    "recipe": recipe,
+                    "invalid_arg": (
+                        {"kind": "auto_tensor"}
+                        if scenario_id in {"invalid_input_cpu", "exception_recovery"}
+                        else None
+                    ),
                 },
             ))
         return plans
+
+    def _recipe_for(self, scenario_id: str, runtime: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Recipe spec consumed by templates/recipe_harness.py."""
+        parallel = max(2, int(runtime.get("tf_data_parallel_calls", 1) or 1))
+        if scenario_id == "tfdata_parallel_map":
+            return {"kind": "tfdata_parallel_map", "num_elements": 64,
+                    "parallel_calls": parallel, "workload": 500}
+        if scenario_id == "tfdata_interleave":
+            return {"kind": "tfdata_interleave", "num_sources": 4,
+                    "per_source": 16, "parallel_calls": parallel, "workload": 500}
+        if scenario_id == "tfdata_early_stop":
+            return {"kind": "tfdata_early_stop", "num_elements": 64, "take": 8,
+                    "parallel_calls": parallel, "workload": 500}
+        if scenario_id == "python_callback_lifecycle":
+            return {"kind": "python_callback_lifecycle", "num_elements": 32,
+                    "parallel_calls": parallel, "exception_at": 8, "workload": 200}
+        return None
 
     def generate_runtime_configs(self, scenario: str, api_categories: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         ids = _SCENARIO_CONFIGS.get(scenario, ["C00"])

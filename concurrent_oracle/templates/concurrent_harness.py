@@ -265,6 +265,127 @@ def _reconstruct_arg(desc: Dict[str, Any], tf):
     raise ValueError(f"unsupported captured argument kind: {kind}")
 
 
+# ── invalid-input mutation (O1/O5) ────────────────────────────
+
+def _mutate_arg(args, kwargs, spec: Dict[str, Any]):
+    """Replace one reconstructed argument with an invalid value.
+
+    The goal is a *controlled* input error, not a fuzzed random object.  The
+    default `None` is rejected by almost every TensorFlow API that requires a
+    tensor; `wrong_type` and `negative_int` cover shape/attribute paths.
+    """
+    args = list(args or [])
+    kwargs = dict(kwargs or {})
+    if not isinstance(spec, dict) or not spec:
+        spec = {"kind": "auto_tensor"}
+    kind = str(spec.get("kind", "none"))
+    if kind == "auto_tensor":
+        import tensorflow as tf
+        target = None
+        for i, value in enumerate(args):
+            if tf.is_tensor(value) or hasattr(value, "dtype"):
+                target = ("arg", i)
+                break
+        if target is None:
+            for key, value in kwargs.items():
+                if tf.is_tensor(value) or hasattr(value, "dtype"):
+                    target = ("kwarg", key)
+                    break
+        if target is None:
+            target = ("arg", 0)
+        if target[0] == "arg":
+            idx = int(target[1])
+            if idx >= len(args):
+                raise IndexError(f"invalid_arg arg_index out of range: {idx}")
+            args[idx] = None
+            path = f"args[{idx}]"
+        else:
+            key = str(target[1])
+            kwargs[key] = None
+            path = f"kwargs.{key}"
+        return args, kwargs, {"kind": kind, "path": path, "value_repr": "None"}
+    if kind == "none":
+        value = None
+    elif kind == "wrong_type":
+        value = object()
+    elif kind == "negative_int":
+        value = -1
+    elif kind == "empty_list":
+        value = []
+    else:
+        value = None
+    path = "args[0]"
+    if "arg_index" in spec:
+        idx = int(spec["arg_index"])
+        path = f"args[{idx}]"
+        if 0 <= idx < len(args):
+            args[idx] = value
+        else:
+            raise IndexError(f"invalid_arg arg_index out of range: {idx}")
+    elif "kwarg" in spec:
+        key = str(spec["kwarg"])
+        path = f"kwargs.{key}"
+        kwargs[key] = value
+    else:
+        if args:
+            args[0] = value
+        else:
+            path = "kwargs.<first>"
+            if kwargs:
+                first = next(iter(kwargs))
+                kwargs[first] = value
+                path = f"kwargs.{first}"
+            else:
+                raise ValueError("cannot mutate an empty argument list")
+    return args, kwargs, {"kind": kind, "path": path,
+                          "value_repr": repr(value)[:200]}
+
+
+# ── input preservation (O4) ───────────────────────────────────
+
+def _digest_descriptor(desc: Any) -> str:
+    import hashlib
+    import json
+    if isinstance(desc, dict) and desc.get("sha256"):
+        return str(desc["sha256"])
+    payload = json.dumps(_jsonable(desc), ensure_ascii=False,
+                         sort_keys=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _input_hashes(args, kwargs) -> Dict[str, str]:
+    """Hash every reconstructed argument without relying on object identity."""
+    out: Dict[str, str] = {}
+    for i, value in enumerate(args or []):
+        key = f"args[{i}]"
+        try:
+            out[key] = _digest_descriptor(_describe_input(value))
+        except Exception as exc:
+            out[key] = f"describe_error:{type(exc).__name__}"
+    for key, value in (kwargs or {}).items():
+        path = f"kwargs.{key}"
+        try:
+            out[path] = _digest_descriptor(_describe_input(value))
+        except Exception as exc:
+            out[path] = f"describe_error:{type(exc).__name__}"
+    return out
+
+
+def _preservation_record(before: Dict[str, str], after: Dict[str, str]) -> Dict[str, Any]:
+    diffs = [
+        {"arg": key, "before": before.get(key), "after": after.get(key)}
+        for key in before
+        if before.get(key) != after.get(key)
+    ]
+    return {
+        "checked": len(before),
+        "preserved": not diffs,
+        "diffs": diffs,
+        "before": before,
+        "after": after,
+    }
+
+
 # ── target patching ────────────────────────────────────────────
 
 def _record() -> Optional[Dict[str, Any]]:
@@ -492,6 +613,7 @@ def _invoke_once(module, case: Dict[str, Any], task_id: int, trial_id: int,
                 call_index = rec["call_index"]
                 _event("TARGET_ENTER", call=dotted, task_id=task_id,
                        trial_id=trial_id, call_index=call_index)
+                before = _input_hashes(args, kwargs)
                 try:
                     out = original(*args, **kwargs)
                     _event("TARGET_RETURN", call=dotted, task_id=task_id,
@@ -513,6 +635,11 @@ def _invoke_once(module, case: Dict[str, Any], task_id: int, trial_id: int,
                     _event("TARGET_EXCEPTION", call=dotted, task_id=task_id,
                            trial_id=trial_id, type=type(exc).__name__)
                     raise
+                finally:
+                    after = _input_hashes(args, kwargs)
+                    rec.setdefault("input_preservation", []).append(
+                        _preservation_record(before, after)
+                    )
         elif case.get("target_calls") and originals:
             # Replay the captured target call arguments directly.  This freezes
             # the real inputs even when TestOneInput uses random sources.
@@ -523,15 +650,25 @@ def _invoke_once(module, case: Dict[str, Any], task_id: int, trial_id: int,
                 original = originals[dotted][2]
                 rec["call_index"] = int(rec.get("call_index", 0)) + 1
                 call_index = rec["call_index"]
+                before = None
                 try:
                     _event("ARG_REBUILD_START", call=dotted, task_id=task_id,
                            trial_id=trial_id, call_index=call_index)
                     args = [_reconstruct_arg(a, tf) for a in spec.get("args", [])]
                     kwargs = {k: _reconstruct_arg(v, tf) for k, v in (spec.get("kwargs") or {}).items()}
+                    if case.get("invalid_arg"):
+                        args, kwargs, mutation = _mutate_arg(
+                            args, kwargs, case.get("invalid_arg")
+                        )
+                        rec["invalid_input"] = {
+                            "mutation": mutation,
+                            "accepted": False,
+                        }
                     _event("ARG_REBUILD_END", call=dotted, task_id=task_id,
                            trial_id=trial_id, call_index=call_index)
                     _event("TARGET_ENTER", call=dotted, task_id=task_id,
                            trial_id=trial_id, call_index=call_index)
+                    before = _input_hashes(args, kwargs)
                     out = original(*args, **kwargs)
                     _event("TARGET_RETURN", call=dotted, task_id=task_id,
                            trial_id=trial_id, call_index=call_index)
@@ -544,14 +681,25 @@ def _invoke_once(module, case: Dict[str, Any], task_id: int, trial_id: int,
                         "call": dotted, "trial_id": trial_id, "call_index": call_index,
                         "output": described,
                     })
+                    if case.get("invalid_arg"):
+                        rec.setdefault("invalid_input", {})["accepted"] = True
                 except Exception as exc:
                     rec["exceptions"].append({
                         "call": dotted, "trial_id": trial_id, "call_index": call_index,
                         "type": type(exc).__name__, "message": str(exc),
                     })
+                    if case.get("invalid_arg"):
+                        rec.setdefault("invalid_input", {})["observed_exception"] = type(exc).__name__
+                        rec.setdefault("invalid_input", {})["observed_message"] = str(exc)[:500]
                     _event("TARGET_EXCEPTION", call=dotted, task_id=task_id,
                            trial_id=trial_id, type=type(exc).__name__)
                     raise
+                finally:
+                    if before is not None:
+                        after = _input_hashes(args, kwargs)
+                        rec.setdefault("input_preservation", []).append(
+                            _preservation_record(before, after)
+                        )
         else:
             module.TestOneInput(_decode(case["data_b64"]))
         if rec["exceptions"] and not rec["outputs"]:
@@ -631,6 +779,31 @@ def _invoke(module, case: Dict[str, Any], task_id: int, trials: int,
     calls: List[Dict[str, Any]] = []
     for r in records:
         calls.extend(r.get("calls") or [])
+    preservation = []
+    for r in records:
+        preservation.extend(r.get("input_preservation") or [])
+    diffs = [d for p in preservation for d in (p.get("diffs") or [])]
+    preservation_summary = {
+        "checked": sum(int(p.get("checked", 0) or 0) for p in preservation),
+        "preserved": all(bool(p.get("preserved", True)) for p in preservation),
+        "diffs": diffs,
+        "records": preservation,
+    }
+    invalid_records = [
+        r.get("invalid_input") for r in records if isinstance(r.get("invalid_input"), dict)
+    ]
+    invalid_summary = None
+    if invalid_records:
+        invalid_summary = dict(invalid_records[0])
+        invalid_summary["accepted"] = any(
+            bool(r.get("invalid_input", {}).get("accepted")) for r in records
+        )
+        observed = [
+            r.get("invalid_input", {}).get("observed_exception")
+            for r in records
+            if r.get("invalid_input", {}).get("observed_exception")
+        ]
+        invalid_summary["observed_exception"] = observed[0] if observed else None
     return {
         "task_id": task_id,
         "input_id": case["case_id"],
@@ -644,6 +817,8 @@ def _invoke(module, case: Dict[str, Any], task_id: int, trials: int,
         "expected_calls": (expected_calls * trials) if expected_calls is not None else None,
         "actual_calls": len(outputs) + len(exceptions),
         "arg_conversions": case.get("arg_conversions") or [],
+        "input_preservation": preservation_summary,
+        "invalid_input": invalid_summary,
         "trial_records": records,
         "outputs": outputs,
         "exceptions": exceptions,
@@ -714,6 +889,82 @@ def run_case(case_config: Dict[str, Any]) -> Dict[str, Any]:
         cases = _load_cases(case_config)
         _event("CASES_READY", count=len(cases),
                captured=sum(1 for c in cases if c.get("target_calls")))
+
+        if mode == "invalid_input":
+            invalid_arg = case_config.get("invalid_arg") or {"kind": "auto_tensor"}
+            tasks = []
+            for i, case in enumerate(cases):
+                c = dict(case)
+                c["invalid_arg"] = invalid_arg
+                task = _invoke(module, c, i, 1, originals, tf)
+                task["phase"] = "B"
+                tasks.append(task)
+            return {
+                "run_id": case_config.get("run_id"),
+                "plan_id": case_config.get("plan_id"),
+                "config_id": case_config.get("config_id"),
+                "mode": mode,
+                "trials": 1,
+                "execution_status": "COMPLETED",
+                "observation_complete": True,
+                "runtime": _runtime_info(tf, runtime),
+                "tasks": tasks,
+                "task_progress": {
+                    "submitted": len(tasks), "started": len(tasks),
+                    "completed": len(tasks), "partial": 0, "failed": 0, "pending": 0,
+                },
+                "config": case_config,
+            }
+
+        if mode == "exception_recovery":
+            valid = [c for c in cases if c.get("target_calls")] or list(cases)
+            if not valid:
+                return {
+                    "run_id": case_config.get("run_id"),
+                    "plan_id": case_config.get("plan_id"),
+                    "config_id": case_config.get("config_id"),
+                    "mode": mode, "trials": 1,
+                    "execution_status": "COMPLETED",
+                    "observation_complete": False,
+                    "runtime": _runtime_info(tf, runtime),
+                    "tasks": [], "task_progress": {},
+                    "config": case_config,
+                }
+            a_case = dict(valid[0])
+            b_case = dict(valid[0])
+            b_case["invalid_arg"] = case_config.get("invalid_arg") or {
+                "kind": "auto_tensor"
+            }
+            c_case = dict(valid[1] if len(valid) > 1 else valid[0])
+            tasks = []
+            for phase, case in (("A", a_case), ("B", b_case), ("C", c_case)):
+                task = _invoke(module, case, len(tasks), 1, originals, tf)
+                task["phase"] = phase
+                if phase == "B" and not isinstance(task.get("invalid_input"), dict):
+                    exceptions = task.get("exceptions") or []
+                    task["invalid_input"] = {
+                        "observed_exception": (exceptions[0].get("type")
+                                               if exceptions else None),
+                        "accepted": task.get("status") == "COMPLETED",
+                    }
+                tasks.append(task)
+            return {
+                "run_id": case_config.get("run_id"),
+                "plan_id": case_config.get("plan_id"),
+                "config_id": case_config.get("config_id"),
+                "mode": mode,
+                "trials": 1,
+                "execution_status": "COMPLETED",
+                "observation_complete": True,
+                "runtime": _runtime_info(tf, runtime),
+                "tasks": tasks,
+                "task_progress": {
+                    "submitted": len(tasks), "started": len(tasks),
+                    "completed": len(tasks), "partial": 0, "failed": 0, "pending": 0,
+                },
+                "config": case_config,
+            }
+
         baseline: Dict[str, Any] = {}
         if mode in ("capture", "baseline", "both"):
             for i, case in enumerate(cases):

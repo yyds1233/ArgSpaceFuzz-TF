@@ -5,8 +5,15 @@ import traceback
 from typing import Any, Dict, Iterable, List, Optional
 
 from .oracles.base import BaseOracle
+from .oracles.callback_lifecycle import CallbackLifecycleOracle
 from .oracles.consistency import ConsistencyOracle
+from .oracles.exception_recovery import ExceptionRecoveryOracle
 from .oracles.independence import IndependenceOracle
+from .oracles.input_preservation import InputPreservationOracle
+from .oracles.invalid_input import InvalidInputOracle
+from .oracles.memory_safety import MemorySafetyOracle
+from .oracles.tfdata_integrity import TFDataIntegrityOracle
+from .oracles.threadpool import ThreadpoolOracle
 from .schemas import (
     ConcurrentTestPlan,
     ExecutionObservation,
@@ -21,7 +28,17 @@ class OracleEngine:
     def __init__(self, oracles: Optional[Iterable[BaseOracle]] = None):
         self.oracles: Dict[str, BaseOracle] = {}
         if oracles is None:
-            oracles = [ConsistencyOracle(), IndependenceOracle()]
+            oracles = [
+                ConsistencyOracle(),
+                IndependenceOracle(),
+                InputPreservationOracle(),
+                ExceptionRecoveryOracle(),
+                TFDataIntegrityOracle(),
+                CallbackLifecycleOracle(),
+                ThreadpoolOracle(),
+                InvalidInputOracle(),
+                MemorySafetyOracle(),
+            ]
         for oracle in oracles:
             self.register(oracle)
 

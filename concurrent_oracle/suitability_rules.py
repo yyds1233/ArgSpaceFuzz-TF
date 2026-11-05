@@ -24,6 +24,19 @@ class SuitabilityRules:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.max_scenarios = int(self.config.get("max_scenarios", 4))
+        self.enabled_oracles = {
+            str(x) for x in (self.config.get("enabled_oracles") or [])
+        }
+
+    def _extended_enabled(self, scenario_id: str) -> bool:
+        """Gate O1/O5 generic scenarios on the configured Oracle set.
+
+        This keeps the default O2/O3 scan report unchanged while allowing an
+        extended config to opt into the new scenarios.
+        """
+        if not self.enabled_oracles:
+            return False
+        return bool(set(SCENARIO_ORACLES.get(scenario_id, [])) & self.enabled_oracles)
 
     def analyze(self, artifact: HarnessArtifact, analysis: HarnessAnalysis) -> Dict[str, Any]:
         categories: List[str] = []
@@ -65,6 +78,12 @@ class SuitabilityRules:
             categories.append("CPU_PARALLEL_OP")
             self._add(scenarios, "parallel_kernel_execution", "HIGH",
                       "The API likely enters a CPU-parallel kernel; intra-op/inter-op settings are relevant.")
+        if (is_pure or is_cpu_parallel) and self._extended_enabled("invalid_input_cpu"):
+            self._add(scenarios, "invalid_input_cpu", "MEDIUM",
+                      "Captured arguments can be mutated to exercise safe rejection.")
+        if (is_pure or is_cpu_parallel) and self._extended_enabled("exception_recovery"):
+            self._add(scenarios, "exception_recovery", "LOW",
+                      "A normal call before/after an expected rejection can exercise recovery.")
         if has_dataset:
             categories.append("DATASET_PIPELINE")
             self._add(scenarios, "tfdata_parallel_map", "HIGH",

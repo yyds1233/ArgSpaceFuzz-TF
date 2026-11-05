@@ -40,6 +40,34 @@ class TestCaseCapture(unittest.TestCase):
             }
             self.assertEqual(count_unsupported_target_cases(unsupported), 1)
 
+    def test_corpus_cases(self):
+        with tempfile.TemporaryDirectory() as td:
+            api = Path(td) / "tf.math.log1p"
+            api.mkdir()
+            (api / "a").write_bytes(b"a")
+            (api / "b").write_bytes(b"bb")
+            (api / "c").write_bytes(b"ccc")
+            cap = CaseCapture(td)
+            cases = cap.corpus_cases("tf.math.log1p", td, max_cases=2)
+            self.assertEqual(len(cases), 2)
+            self.assertTrue(all(c["source"] == "argfuzz_corpus" for c in cases))
+            self.assertTrue(all("byte_sha256" in c for c in cases))
+
+    def test_mark_ineligible(self):
+        with tempfile.TemporaryDirectory() as td:
+            cap = CaseCapture(td)
+            cap.write_cases("p")
+            cap.merge_captured_cases("p", {
+                "case_000": {"target_calls": [{"call": "tf.x", "args": [], "kwargs": {}}],
+                             "source": "captured_target_call"},
+            })
+            self.assertEqual(cap.mark_ineligible("p", ["case_000"], "baseline_not_complete"), 1)
+            data = json.loads(cap.case_path("p").read_text())
+            row = {c["case_id"]: c for c in data["cases"]}["case_000"]
+            self.assertFalse(row["eligible"])
+            self.assertEqual(row["ineligible_reason"], "baseline_not_complete")
+            self.assertEqual(cap.mark_ineligible("p", ["case_000"], "again"), 0)
+
     def test_case_eligibility(self):
         good = {
             "target_calls": [{

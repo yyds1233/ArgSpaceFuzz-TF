@@ -15,6 +15,14 @@ class TestProcessManager(unittest.TestCase):
         self.assertEqual(r.signal, "SIGKILL")
         self.assertLess(r.duration, 4.0)
 
+    def test_native_crash_signal_capture(self):
+        pm = ProcessManager(sys.executable, preload_path=None)
+        code = "import os, signal; os.kill(os.getpid(), signal.SIGABRT)"
+        r = pm.run([sys.executable, "-c", code], cwd="/tmp", timeout=5)
+        self.assertIsNotNone(r.rc)
+        self.assertLess(r.rc, 0)
+        self.assertEqual(r.signal, "SIGABRT")
+
     def test_no_progress_watchdog_and_stack_signal(self):
         with tempfile.TemporaryDirectory() as td:
             events = Path(td) / "events.jsonl"
